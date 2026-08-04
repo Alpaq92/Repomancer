@@ -13,6 +13,7 @@
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
+#include <wx/aui/dockart.h>
 #include <wx/settings.h>
 #include <wx/treectrl.h>
 #include <wx/sizer.h>
@@ -158,14 +159,6 @@ MainFrame::MainFrame()
     details_->SetExtraAscent(2);
     details_->StyleSetFont(wxSTC_STYLE_DEFAULT,
                            wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
-    details_->StyleSetForeground(wxSTC_STYLE_DEFAULT,
-                                 wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
-    details_->StyleSetBackground(wxSTC_STYLE_DEFAULT,
-                                 wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
-    details_->StyleClearAll();
-    // Style 1 exists only to shrink the blank leading line into a small top
-    // inset — Scintilla sizes a line by the styles used on it.
-    details_->StyleSetSize(1, 4);
 
     files_ = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                             wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
@@ -213,6 +206,7 @@ MainFrame::MainFrame()
                             .CloseButton(false)
                             .Position(2));
     aui_.Update();
+    ApplyThemeToWidgets();
 
     Bind(wxEVT_MENU, &MainFrame::OnOpenRepository, this, wxID_OPEN);
     Bind(wxEVT_MENU, &MainFrame::OnThemeSelected, this, ID_ThemeSystem, ID_ThemeDark);
@@ -374,14 +368,41 @@ void MainFrame::OnRefActivated(wxTreeEvent& event) {
     SetStatusText(wxString::Format(_("Ref: %s"), data->full_name()));
 }
 
+void MainFrame::ApplyThemeToWidgets() {
+    // Anything that reads a system colour once and keeps it has to be told to
+    // read again: Scintilla styles are fixed at the time they are set, and
+    // wxAUI's art provider computes its caption and border colours when it is
+    // created. Everything else here follows the platform theme on its own.
+    details_->StyleSetForeground(wxSTC_STYLE_DEFAULT,
+                                 wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
+    details_->StyleSetBackground(wxSTC_STYLE_DEFAULT,
+                                 wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
+    details_->StyleClearAll();
+    // Style 1 exists only to shrink the blank leading line into a small top
+    // inset — Scintilla sizes a line by the styles used on it.
+    details_->StyleSetSize(1, 2);
+
+    diff_->ApplyTheme();
+
+    // A fresh art provider is the supported way to make wxAUI re-read the
+    // system palette; the existing one has no refresh entry point.
+    aui_.SetArtProvider(new wxAuiDefaultDockArt);
+    aui_.Update();
+
+    Refresh();
+}
+
 void MainFrame::SetDetailsText(const wxString& text) {
     details_->SetReadOnly(false);
     // A blank leading line is the only top inset Scintilla offers; padding it
     // from outside would move the control itself off the pane edge.
-    details_->SetText(text.empty() ? text : "\n" + text);
+    // The pad line carries a space: Scintilla measures an empty line with the
+    // default style, so without a character to hold the small style the line
+    // keeps its full height.
+    details_->SetText(text.empty() ? text : " \n" + text);
     if (!text.empty()) {
         details_->StartStyling(0);
-        details_->SetStyling(1, 1);
+        details_->SetStyling(2, 1); // the space and its newline
     }
     details_->SetReadOnly(true);
 }
@@ -446,8 +467,16 @@ void MainFrame::OnThemeSelected(wxCommandEvent& event) {
     }
 
     const bool applied_live = repomancer::gui::apply_theme(mode);
-    if (applied_live && diff_ != nullptr) {
-        diff_->ApplyTheme();
+    if (applied_live) {
+        // Deferred: the toolkit applies the new palette on its next pass, so
+        // reading system colours right here would hand back the old ones and
+        // leave everything that caches them a theme behind.
+        CallAfter([this] {
+            ApplyThemeToWidgets();
+            // The graph reads its casing colour per render, so the rows have
+            // to be re-rendered for the new highlight to take effect.
+            RefreshLogRows();
+        });
     }
 
     auto settings = repomancer::load_settings();

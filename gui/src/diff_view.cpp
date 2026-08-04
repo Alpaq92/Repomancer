@@ -99,7 +99,7 @@ void DiffView::ApplyTheme() {
     StyleSetForeground(Style_Meta, dark ? kMetaFgDark : kMetaFg);
     // Scintilla sizes a line by the styles on it, so a tiny font on the blank
     // leading line turns a full line height into a few pixels of top inset.
-    StyleSetSize(Style_Pad, 4);
+    StyleSetSize(Style_Pad, 2);
     Refresh();
 }
 
@@ -113,10 +113,10 @@ void DiffView::SetReadOnlyText(const wxString& text) {
 void DiffView::Clear() { SetReadOnlyText(wxEmptyString); }
 
 void DiffView::ShowMessage(const wxString& message) {
-    SetReadOnlyText("\n" + message);
+    SetReadOnlyText(" \n" + message);
     StartStyling(0);
-    SetStyling(1, Style_Pad); // the leading newline is the top inset
-    SetStyling(GetTextLength() - 1, Style_Meta);
+    SetStyling(2, Style_Pad); // the space and newline forming the top inset
+    SetStyling(GetTextLength() - 2, Style_Meta);
 }
 
 void DiffView::ShowDiff(const std::vector<repomancer::vcs::FileDiff>& files) {
@@ -135,8 +135,10 @@ void DiffView::ShowDiff(const std::vector<repomancer::vcs::FileDiff>& files) {
     };
 
     // Scintilla has no top margin, so the inset above the first line is a
-    // blank line inside the document, shrunk by its style.
-    append(wxEmptyString, Style_Pad);
+    // near-empty line inside the document, shrunk by its style. It carries a
+    // space because Scintilla measures a truly empty line with the default
+    // style, which would keep its full height.
+    append(" ", Style_Pad);
 
     for (const auto& file : files) {
         const wxString name = file.new_path.empty() ? wxString::FromUTF8(file.old_path)

@@ -43,6 +43,8 @@ private:
     // Forces every visible row to be re-rendered, preserving the selection.
     void RefreshLogRows();
     void SetDetailsText(const wxString& text);
+    // Re-reads system colours into everything that caches them.
+    void ApplyThemeToWidgets();
     void PopulateRefs();
     // Sizes every column to its content and lets Subject absorb the rest.
     void FitColumns();
