@@ -76,4 +76,10 @@ private:
     std::vector<repomancer::vcs::ChangedFile> changed_files_;
     std::thread worker_;
     std::atomic<bool> busy_{false};
+    // Selection details are fetched off the UI thread; the generation numbers
+    // let a newer selection silently drop results that arrive for an older one.
+    std::thread files_worker_;
+    std::thread diff_worker_;
+    std::atomic<unsigned> files_generation_{0};
+    std::atomic<unsigned> diff_generation_{0};
 };

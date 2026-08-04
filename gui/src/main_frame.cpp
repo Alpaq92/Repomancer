@@ -363,34 +363,50 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
     }
     SetDetailsText(text);
 
-    // The file list is small enough to fetch inline; the patch for a selected
-    // file is fetched on demand.
     files_->DeleteAllItems();
     changed_files_.clear();
     diff_->ShowMessage(_("Select a file to see its changes."));
 
-    auto files = GitDriver().changed_files(repo_path_, selected_commit_);
-    if (!files.ok()) {
-        diff_->ShowMessage(wxString::Format(_("Could not list changed files: %s"),
-                                            wxString::FromUTF8(files.error().message)));
-        return;
+    // Off the UI thread: a git subprocess per selection would freeze the
+    // whole window for its duration, which reads as a stutter on every
+    // click. A newer selection bumps the generations, so a fetch that comes
+    // back late finds itself stale and is dropped.
+    const unsigned generation = ++files_generation_;
+    ++diff_generation_;
+    if (files_worker_.joinable()) {
+        files_worker_.join();
     }
-    changed_files_ = std::move(files).value();
-    long row = 0;
-    for (const auto& file : changed_files_) {
-        const auto name = repomancer::vcs::file_change_name(file.change);
-        files_->InsertItem(row, wxEmptyString);
-        files_->SetItem(row, 1, wxString::FromUTF8(std::string(name)));
-        wxString path = wxString::FromUTF8(file.path);
-        if (!file.old_path.empty()) {
-            path = wxString::FromUTF8(file.old_path) + " → " + path;
-        }
-        files_->SetItem(row, 2, path);
-        ++row;
-    }
-    if (!changed_files_.empty()) {
-        files_->SetItemState(0, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
-    }
+    files_worker_ = std::thread([this, generation, repo = repo_path_,
+                                 commit = selected_commit_] {
+        auto files = GitDriver().changed_files(repo, commit);
+        CallAfter([this, generation, files = std::move(files)]() mutable {
+            if (generation != files_generation_.load()) {
+                return;
+            }
+            if (!files.ok()) {
+                diff_->ShowMessage(
+                    wxString::Format(_("Could not list changed files: %s"),
+                                     wxString::FromUTF8(files.error().message)));
+                return;
+            }
+            changed_files_ = std::move(files).value();
+            long row = 0;
+            for (const auto& file : changed_files_) {
+                const auto name = repomancer::vcs::file_change_name(file.change);
+                files_->InsertItem(row, wxEmptyString);
+                files_->SetItem(row, 1, wxString::FromUTF8(std::string(name)));
+                wxString path = wxString::FromUTF8(file.path);
+                if (!file.old_path.empty()) {
+                    path = wxString::FromUTF8(file.old_path) + " → " + path;
+                }
+                files_->SetItem(row, 2, path);
+                ++row;
+            }
+            if (!changed_files_.empty()) {
+                files_->SetItemState(0, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
+            }
+        });
+    });
 }
 
 void MainFrame::PopulateRepoDetails() {
@@ -630,17 +646,31 @@ void MainFrame::ShowFileDiff(long index) {
         return;
     }
     const auto& file = changed_files_[static_cast<std::size_t>(index)];
-    const auto diff = GitDriver().file_diff(repo_path_, selected_commit_, file.path);
-    if (!diff.ok()) {
-        diff_->ShowMessage(wxString::Format(_("Could not read the diff: %s"),
-                                            wxString::FromUTF8(diff.error().message)));
-        return;
+
+    const unsigned generation = ++diff_generation_;
+    if (diff_worker_.joinable()) {
+        diff_worker_.join();
     }
-    if (diff.value().empty()) {
-        diff_->ShowMessage(_("No textual changes."));
-        return;
-    }
-    diff_->ShowDiff(diff.value());
+    diff_worker_ = std::thread([this, generation, repo = repo_path_,
+                                commit = selected_commit_, path = file.path] {
+        const auto diff = GitDriver().file_diff(repo, commit, path);
+        CallAfter([this, generation, diff] {
+            if (generation != diff_generation_.load()) {
+                return;
+            }
+            if (!diff.ok()) {
+                diff_->ShowMessage(
+                    wxString::Format(_("Could not read the diff: %s"),
+                                     wxString::FromUTF8(diff.error().message)));
+                return;
+            }
+            if (diff.value().empty()) {
+                diff_->ShowMessage(_("No textual changes."));
+                return;
+            }
+            diff_->ShowDiff(diff.value());
+        });
+    });
 }
 
 void MainFrame::OnGraphStyleSelected(wxCommandEvent& event) {
@@ -687,6 +717,12 @@ void MainFrame::OnThemeSelected(wxCommandEvent& event) {
 MainFrame::~MainFrame() {
     if (worker_.joinable()) {
         worker_.join();
+    }
+    if (files_worker_.joinable()) {
+        files_worker_.join();
+    }
+    if (diff_worker_.joinable()) {
+        diff_worker_.join();
     }
     aui_.UnInit();
 }
