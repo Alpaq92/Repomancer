@@ -36,6 +36,10 @@ public:
         on_activate_ = std::move(handler);
     }
 
+    // A press at `point` (client coordinates): highlights the item under it
+    // and activates its target, if any.
+    void OnItemPress(const wxPoint& point);
+
 private:
     // The line under `point`, in the control's client coordinates, or -1.
     [[nodiscard]] int LineAt(const wxPoint& point);

@@ -7,6 +7,10 @@
 #include <wx/settings.h>
 #include <wx/utils.h>
 
+#ifdef __WXGTK__
+#include <gtk/gtk.h>
+#endif
+
 #include <vector>
 
 namespace repomancer::gui {
@@ -99,6 +103,26 @@ private:
     const int* selected_line_;
 };
 
+#ifdef __WXGTK__
+extern "C" {
+static gboolean repo_view_button_press(GtkWidget* widget, GdkEventButton* event,
+                                       gpointer data) {
+    // Only presses on the rows themselves; header clicks arrive on another
+    // GdkWindow and their coordinates would convert into nonsense.
+    if (event->type == GDK_BUTTON_PRESS && event->button == 1 &&
+        event->window == gtk_tree_view_get_bin_window(GTK_TREE_VIEW(widget))) {
+        int x = 0;
+        int y = 0;
+        gtk_tree_view_convert_bin_window_to_widget_coords(
+            GTK_TREE_VIEW(widget), static_cast<int>(event->x),
+            static_cast<int>(event->y), &x, &y);
+        static_cast<repomancer::gui::RepoView*>(data)->OnItemPress(wxPoint(x, y));
+    }
+    return FALSE;
+}
+}
+#endif
+
 } // namespace
 
 RepoView::RepoView(wxWindow* parent)
@@ -146,6 +170,18 @@ RepoView::RepoView(wxWindow* parent)
             Refresh();
         });
     });
+}
+
+void RepoView::OnItemPress(const wxPoint& point) {
+    const int line = LineAt(point);
+    if (line >= 0 && line < static_cast<int>(targets_.size()) &&
+        !targets_[line].empty()) {
+        selected_line_ = line;
+        Refresh();
+        if (on_activate_) {
+            on_activate_(targets_[line]);
+        }
+    }
 }
 
 int RepoView::LineAt(const wxPoint& point) {
