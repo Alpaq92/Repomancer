@@ -1,6 +1,10 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "base",
@@ -54,6 +58,15 @@
       }
     },
     {
+      "name": "linux-release-syswx",
+      "displayName": "Linux Release (GUI via system wxWidgets)",
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "REPOMANCER_WERROR": "ON"
+      }
+    },
+    {
       "name": "linux-asan",
       "displayName": "Linux ASan+UBSan core+tests",
       "inherits": "ninja-base",
@@ -68,7 +81,11 @@
       "name": "macos-debug",
       "displayName": "macOS Debug (GUI)",
       "inherits": "ninja-base",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "VCPKG_MANIFEST_FEATURES": "gui"
@@ -78,7 +95,11 @@
       "name": "macos-release",
       "displayName": "macOS Release (GUI)",
       "inherits": "ninja-base",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "VCPKG_MANIFEST_FEATURES": "gui",
@@ -90,8 +111,15 @@
       "displayName": "Windows MSVC Debug (GUI)",
       "inherits": "base",
       "generator": "Visual Studio 17 2022",
-      "architecture": { "value": "x64", "strategy": "set" },
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
       "cacheVariables": {
         "VCPKG_MANIFEST_FEATURES": "gui"
       }
@@ -107,47 +135,99 @@
     }
   ],
   "buildPresets": [
-    { "name": "linux-core-debug", "configurePreset": "linux-core-debug" },
-    { "name": "linux-debug", "configurePreset": "linux-debug" },
-    { "name": "linux-debug-syswx", "configurePreset": "linux-debug-syswx" },
-    { "name": "linux-release", "configurePreset": "linux-release" },
-    { "name": "linux-asan", "configurePreset": "linux-asan" },
-    { "name": "macos-debug", "configurePreset": "macos-debug" },
-    { "name": "macos-release", "configurePreset": "macos-release" },
-    { "name": "windows-msvc-debug", "configurePreset": "windows-msvc-debug", "configuration": "Debug" },
-    { "name": "windows-msvc-release", "configurePreset": "windows-msvc-release", "configuration": "Release" }
+    {
+      "name": "linux-core-debug",
+      "configurePreset": "linux-core-debug"
+    },
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "linux-debug-syswx",
+      "configurePreset": "linux-debug-syswx"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release"
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan"
+    },
+    {
+      "name": "macos-debug",
+      "configurePreset": "macos-debug"
+    },
+    {
+      "name": "macos-release",
+      "configurePreset": "macos-release"
+    },
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-release-syswx",
+      "configurePreset": "linux-release-syswx"
+    }
   ],
   "testPresets": [
     {
       "name": "linux-core-debug",
       "configurePreset": "linux-core-debug",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "linux-debug-syswx",
       "configurePreset": "linux-debug-syswx",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "linux-asan",
       "configurePreset": "linux-asan",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "linux-release",
       "configurePreset": "linux-release",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "macos-release",
       "configurePreset": "macos-release",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "windows-msvc-release",
       "configurePreset": "windows-msvc-release",
       "configuration": "Release",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-release-syswx",
+      "configurePreset": "linux-release-syswx",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

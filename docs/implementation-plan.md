@@ -489,6 +489,20 @@ fallback). Bundling portable OpenSSH (BSD licence, would be clean) is therefore 
   vendored bcrypt_pbkdf (BSD/ISC) · WinSparkle/Sparkle (MIT) · libcurl (curl license) ·
   wxTranslations' own .mo loader (**no GNU libintl/LGPL needed**) · pugixml (MIT) · utf8proc
   (MIT) · minisign verification (ISC) · libsvn optional (Apache-2.0).
+- **Transitive build dependencies are not app dependencies.** On Linux the vcpkg
+  `gui` feature builds the whole GTK stack from source — 78 packages — because
+  `wxwidgets → gtk3 → libsystemd → libxcrypt`, and **libxcrypt is LGPL-2.1-or-later**
+  (verified upstream; the vcpkg port records no license). None of it is Repomancer
+  code and none of it changes Repomancer's license: LGPL never reaches the license of
+  code that merely links it. Its obligations attach to *distributing binaries*, and
+  dynamic linking discharges them — which is exactly the packaging already specified
+  in §8 (static wx on Windows/macOS, **distro-dynamic on Linux**, where GTK and
+  libcrypt are system libraries). The one path that would create real work is shipping
+  a self-contained Linux binary that statically bundles this stack (an AppImage built
+  the vcpkg way): LGPL-2.1 §6 would then require shipping relinkable object files.
+  Native distro packages being primary on Linux avoids it. Windows and macOS never
+  involve GTK at all, so libxcrypt does not appear there.
+
 - **Maximal-permissiveness knobs** (how permissive "as it could be" is achieved):
   1. **Omit libgit2** (GPLv2 + linking exception — linkable but copyleft-adjacent): the CLI
      path is the reference implementation, so the accelerator is strictly optional.
