@@ -9,6 +9,7 @@
 #include <wx/dcmemory.h>
 #include <wx/graphics.h>
 #include <wx/pen.h>
+#include <wx/settings.h>
 
 #include <algorithm>
 #include <memory>
@@ -111,7 +112,7 @@ wxSize GraphRenderer::GetSize() const {
     return wxSize(kMargin * 2 + max_lanes_ * kLaneWidth, kRowHeight);
 }
 
-bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
+bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
     const auto* row = current_row();
     if (row == nullptr) {
         return true;
@@ -170,6 +171,15 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
     // drawing straight onto it gives aliased, visibly stepped diagonals.
     // wxGraphicsContext::Create(wxMemoryDC&) is supported everywhere, so the
     // strip is composited with antialiasing and then blitted over the row.
+    // A selected row is painted in the system highlight colour, which a lane
+    // of a similar hue vanishes into — the blue mainline against a blue
+    // selection being the obvious case. Lines and dots are laid down over a
+    // wider stroke in the highlight's own text colour first, so every lane
+    // keeps its branch colour and stays legible whatever is behind it.
+    const bool selected = (state & wxDATAVIEW_CELL_SELECTED) != 0;
+    const wxColour casing = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT);
+    const double casing_width = kLineWidth + 2.0;
+
     wxBitmap strip(width, height, 32);
     strip.UseAlpha();
     bool painted = false;
@@ -189,21 +199,20 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
             gc->SetCompositionMode(wxCOMPOSITION_OVER);
 
             for (const auto& line : lines) {
+                if (selected) {
+                    gc->SetPen(wxPen(casing, static_cast<int>(casing_width)));
+                    gc->StrokeLine(line.x, line.y1, line.x, line.y2);
+                }
                 gc->SetPen(graph_pen(line.colour));
                 gc->StrokeLine(line.x, line.y1, line.x, line.y2);
             }
             for (const auto& curve : curves) {
-                gc->SetPen(graph_pen(curve.colour));
                 if (style_ == GraphStyle::Angular) {
                     // Orthogonal routing: the line only ever runs straight up,
                     // down or across, turning through square corners. Which leg
                     // comes first is fixed by the boundary — whichever end sits
                     // on a row edge has to arrive vertically, or the next row
                     // resumes the lane at the wrong x.
-                    wxPen pen = graph_pen(curve.colour);
-                    pen.SetJoin(wxJOIN_MITER); // square corners, not rounded
-                    gc->SetPen(pen);
-
                     wxGraphicsPath path = gc->CreatePath();
                     path.MoveToPoint(curve.x1, curve.y1);
                     switch (curve.kind) {
@@ -224,6 +233,15 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
                     }
                     }
                     path.AddLineToPoint(curve.x2, curve.y2);
+                    if (selected) {
+                        wxPen halo(casing, static_cast<int>(casing_width));
+                        halo.SetJoin(wxJOIN_MITER);
+                        gc->SetPen(halo);
+                        gc->StrokePath(path);
+                    }
+                    wxPen pen = graph_pen(curve.colour);
+                    pen.SetJoin(wxJOIN_MITER); // square corners, not rounded
+                    gc->SetPen(pen);
                     gc->StrokePath(path);
                     continue;
                 }
@@ -248,12 +266,23 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
                 wxGraphicsPath path = gc->CreatePath();
                 path.MoveToPoint(curve.x1, curve.y1);
                 path.AddCurveToPoint(c1x, c1y, c2x, c2y, curve.x2, curve.y2);
+                if (selected) {
+                    gc->SetPen(wxPen(casing, static_cast<int>(casing_width)));
+                    gc->StrokePath(path);
+                }
+                gc->SetPen(graph_pen(curve.colour));
                 gc->StrokePath(path);
             }
 
             // The dot goes on last so it covers the line ends it should.
             const double radius = row->is_merge ? kMergeDotRadius : kDotRadius;
             const wxColour dot_colour = lane_colour(row->color);
+            if (selected) {
+                gc->SetBrush(wxBrush(casing));
+                gc->SetPen(wxPen(casing, 1));
+                const double outer = radius + 1.5;
+                gc->DrawEllipse(dot_x - outer, middle - outer, outer * 2, outer * 2);
+            }
             gc->SetBrush(wxBrush(dot_colour));
             gc->SetPen(wxPen(dot_colour, 1));
             gc->DrawEllipse(dot_x - radius, middle - radius, radius * 2, radius * 2);
