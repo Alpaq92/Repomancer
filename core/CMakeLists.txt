@@ -2,6 +2,7 @@
 
 add_library(repomancer-core STATIC
   src/process/process_runner.cpp
+  src/settings.cpp
   src/vcs/git/porcelain.cpp
   src/vcs/git/log_format.cpp
   src/vcs/git/git_driver.cpp

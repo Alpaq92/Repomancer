@@ -36,6 +36,14 @@
       }
     },
     {
+      "name": "linux-debug-syswx",
+      "displayName": "Linux Debug (GUI via system wxWidgets)",
+      "inherits": "ninja-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
       "name": "linux-release",
       "displayName": "Linux Release (GUI)",
       "inherits": "ninja-base",
@@ -101,6 +109,7 @@
   "buildPresets": [
     { "name": "linux-core-debug", "configurePreset": "linux-core-debug" },
     { "name": "linux-debug", "configurePreset": "linux-debug" },
+    { "name": "linux-debug-syswx", "configurePreset": "linux-debug-syswx" },
     { "name": "linux-release", "configurePreset": "linux-release" },
     { "name": "linux-asan", "configurePreset": "linux-asan" },
     { "name": "macos-debug", "configurePreset": "macos-debug" },
@@ -112,6 +121,11 @@
     {
       "name": "linux-core-debug",
       "configurePreset": "linux-core-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "linux-debug-syswx",
+      "configurePreset": "linux-debug-syswx",
       "output": { "outputOnFailure": true }
     },
     {

@@ -6,12 +6,25 @@ add_executable(repomancer WIN32 MACOSX_BUNDLE
   src/main.cpp
   src/main_frame.cpp
   src/log_model.cpp
+  src/theme.cpp
 )
 
 target_link_libraries(repomancer PRIVATE
   repomancer::core
   ${wxWidgets_LIBRARIES}
 )
+
+# theme.cpp's wx<3.3 fallback talks to GtkSettings directly; wx does not
+# propagate GTK include dirs.
+if(UNIX AND NOT APPLE)
+  find_package(PkgConfig)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(GTK3 IMPORTED_TARGET gtk+-3.0)
+    if(GTK3_FOUND)
+      target_link_libraries(repomancer PRIVATE PkgConfig::GTK3)
+    endif()
+  endif()
+endif()
 
 repomancer_warnings(repomancer)
 repomancer_harden(repomancer)

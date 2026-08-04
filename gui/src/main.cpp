@@ -2,6 +2,9 @@
 // Copyright 2026 Repomancer contributors
 
 #include "main_frame.h"
+#include "theme.h"
+
+#include <repomancer/settings.h>
 
 #include <wx/app.h>
 #include <wx/intl.h>
@@ -12,11 +15,16 @@ public:
         if (!wxApp::OnInit()) {
             return false;
         }
-#if defined(__WXMSW__) && wxCHECK_VERSION(3, 3, 0)
-        MSWEnableDarkMode(DarkMode_Auto);
-#endif
         SetAppName("Repomancer");
         SetVendorName("Repomancer");
+
+        // Theme must be applied before the first window exists (MSW
+        // constraint); the choice persists in settings.json.
+        const auto settings = repomancer::load_settings();
+        repomancer::gui::init_theme_support();
+        repomancer::gui::apply_theme(
+            repomancer::gui::theme_mode_from_string(settings.theme));
+
         // Catalogs ship later (implementation-plan.md §4.3); initializing the
         // locale now keeps date/number formatting correct from day one.
         locale_.Init(wxLANGUAGE_DEFAULT, wxLOCALE_DONT_LOAD_DEFAULT);

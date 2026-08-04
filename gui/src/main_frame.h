@@ -19,6 +19,7 @@ public:
 
 private:
     void OnOpenRepository(wxCommandEvent& event);
+    void OnThemeSelected(wxCommandEvent& event);
     void OnQuit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);
 

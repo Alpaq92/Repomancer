@@ -32,6 +32,13 @@ if(REPOMANCER_BUILD_TESTS)
 endif()
 
 if(REPOMANCER_BUILD_GUI)
+  if(UNIX)
+    # CMake's FindwxWidgets locates wx-config with ONLY_CMAKE_FIND_ROOT_PATH,
+    # and the vcpkg toolchain narrows the find root to vcpkg_installed —
+    # pre-seed the cache so a system wxWidgets is usable when the vcpkg
+    # 'gui' feature is off.
+    find_program(wxWidgets_CONFIG_EXECUTABLE NAMES wx-config)
+  endif()
   find_package(wxWidgets COMPONENTS aui core base)
   if(wxWidgets_FOUND)
     add_subdirectory(gui)
