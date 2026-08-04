@@ -17,6 +17,7 @@ enum DiffStyle {
     Style_HunkHeader,
     Style_FileHeader,
     Style_Meta,
+    Style_Pad, // the leading blank line, shrunk to act as a top inset
 };
 
 // Open Color, matched to the lane palette (see graph_renderer.cpp). The tinted
@@ -96,6 +97,9 @@ void DiffView::ApplyTheme() {
     StyleSetForeground(Style_FileHeader, window_fg);
     StyleSetBold(Style_FileHeader, true);
     StyleSetForeground(Style_Meta, dark ? kMetaFgDark : kMetaFg);
+    // Scintilla sizes a line by the styles on it, so a tiny font on the blank
+    // leading line turns a full line height into a few pixels of top inset.
+    StyleSetSize(Style_Pad, 4);
     Refresh();
 }
 
@@ -109,9 +113,10 @@ void DiffView::SetReadOnlyText(const wxString& text) {
 void DiffView::Clear() { SetReadOnlyText(wxEmptyString); }
 
 void DiffView::ShowMessage(const wxString& message) {
-    SetReadOnlyText(message);
+    SetReadOnlyText("\n" + message);
     StartStyling(0);
-    SetStyling(GetTextLength(), Style_Meta);
+    SetStyling(1, Style_Pad); // the leading newline is the top inset
+    SetStyling(GetTextLength() - 1, Style_Meta);
 }
 
 void DiffView::ShowDiff(const std::vector<repomancer::vcs::FileDiff>& files) {
@@ -128,6 +133,10 @@ void DiffView::ShowDiff(const std::vector<repomancer::vcs::FileDiff>& files) {
         text += with_eol;
         runs.emplace_back(with_eol.utf8_str().length(), style);
     };
+
+    // Scintilla has no top margin, so the inset above the first line is a
+    // blank line inside the document, shrunk by its style.
+    append(wxEmptyString, Style_Pad);
 
     for (const auto& file : files) {
         const wxString name = file.new_path.empty() ? wxString::FromUTF8(file.old_path)

@@ -131,19 +131,11 @@ MainFrame::MainFrame()
     // Wrapped, not clipped: a long subject or a wide body should reflow
     // rather than force horizontal scrolling, and the text needs room to
     // breathe away from the pane border.
-    // The detail panes are inset from the inside — Scintilla's own text
-    // margins, and a blank spacer column in the file list. Scintilla has no
-    // top margin though, so the two text panes get theirs from a sizer border
-    // applied to that edge only: a full border would push the scrollbars off
-    // the pane edges and leave a gap beneath them.
-    const auto pad_top = [](wxWindow* parent, wxWindow* child) {
-        auto* panel = dynamic_cast<wxPanel*>(parent);
-        auto* sizer = new wxBoxSizer(wxVERTICAL);
-        sizer->Add(child, 1, wxEXPAND | wxTOP, 8);
-        panel->SetSizer(sizer);
-        panel->SetBackgroundColour(child->GetBackgroundColour());
-    };
-
+    // The detail panes are inset from the inside throughout: Scintilla's own
+    // text margins at the sides, a blank leading line for the top — it has no
+    // top-margin setting — and a blank spacer column in the file list. Nothing
+    // is inset with an outer border, so every control still reaches its pane
+    // edges and its scrollbars sit where they belong.
     // No wrapping: the pane is mostly hashes and identity lines, and breaking
     // a 40-character hash across two rows reads as damage rather than reflow.
     // The inset comes from a sizer border — wxTextCtrl::SetMargins is not
@@ -153,8 +145,7 @@ MainFrame::MainFrame()
     // SetMargins for multiline text on GTK, so its first character sits hard
     // against the frame. Read-only and unlexed, it is just a text pane with a
     // margin that works.
-    auto* details_panel = new wxPanel(this);
-    details_ = new wxStyledTextCtrl(details_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    details_ = new wxStyledTextCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                     wxBORDER_NONE);
     details_->SetReadOnly(true);
     details_->SetLexer(wxSTC_LEX_NULL);
@@ -172,7 +163,9 @@ MainFrame::MainFrame()
     details_->StyleSetBackground(wxSTC_STYLE_DEFAULT,
                                  wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
     details_->StyleClearAll();
-    pad_top(details_panel, details_);
+    // Style 1 exists only to shrink the blank leading line into a small top
+    // inset — Scintilla sizes a line by the styles used on it.
+    details_->StyleSetSize(1, 4);
 
     files_ = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                             wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
@@ -182,9 +175,7 @@ MainFrame::MainFrame()
     files_->AppendColumn(_("Change"), wxLIST_FORMAT_LEFT, 90);
     files_->AppendColumn(_("File"), wxLIST_FORMAT_LEFT, 320);
 
-    auto* diff_panel = new wxPanel(this);
-    diff_ = new repomancer::gui::DiffView(diff_panel);
-    pad_top(diff_panel, diff_);
+    diff_ = new repomancer::gui::DiffView(this);
 
     refs_tree_ = new wxTreeCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                 wxTR_HAS_BUTTONS | wxTR_HIDE_ROOT | wxTR_NO_LINES |
@@ -201,7 +192,7 @@ MainFrame::MainFrame()
                                  .BestSize(230, -1)
                                  .MinSize(160, -1)
                                  .CloseButton(false));
-    aui_.AddPane(details_panel, wxAuiPaneInfo()
+    aui_.AddPane(details_, wxAuiPaneInfo()
                                .Bottom()
                                .Name("details")
                                .Caption(_("Commit details"))
@@ -214,7 +205,7 @@ MainFrame::MainFrame()
                              .BestSize(360, 260)
                              .CloseButton(false)
                              .Position(1));
-    aui_.AddPane(diff_panel, wxAuiPaneInfo()
+    aui_.AddPane(diff_, wxAuiPaneInfo()
                             .Bottom()
                             .Name("diff")
                             .Caption(_("Diff"))
@@ -385,7 +376,13 @@ void MainFrame::OnRefActivated(wxTreeEvent& event) {
 
 void MainFrame::SetDetailsText(const wxString& text) {
     details_->SetReadOnly(false);
-    details_->SetText(text);
+    // A blank leading line is the only top inset Scintilla offers; padding it
+    // from outside would move the control itself off the pane edge.
+    details_->SetText(text.empty() ? text : "\n" + text);
+    if (!text.empty()) {
+        details_->StartStyling(0);
+        details_->SetStyling(1, 1);
+    }
     details_->SetReadOnly(true);
 }
 
