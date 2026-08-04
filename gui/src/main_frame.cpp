@@ -3,6 +3,7 @@
 
 #include "main_frame.h"
 
+#include "pane_header.h"
 #include "theme.h"
 
 #include <repomancer/settings.h>
@@ -134,6 +135,17 @@ MainFrame::MainFrame()
     // Wrapped, not clipped: a long subject or a wide body should reflow
     // rather than force horizontal scrolling, and the text needs room to
     // breathe away from the pane border.
+    // Each pane is titled by a real header control sitting above its content,
+    // the same kind the log uses for its columns, so both read as one sort of
+    // header. wxAUI's own caption is switched off for these panes.
+    const auto titled = [](wxPanel* panel, const wxString& title, wxWindow* content) {
+        auto* header = new repomancer::gui::PaneHeader(panel, title);
+        auto* sizer = new wxBoxSizer(wxVERTICAL);
+        sizer->Add(header, 0, wxEXPAND);
+        sizer->Add(content, 1, wxEXPAND);
+        panel->SetSizer(sizer);
+    };
+
     // The detail panes are inset from the inside throughout: Scintilla's own
     // text margins at the sides, a blank leading line for the top — it has no
     // top-margin setting — and a blank spacer column in the file list. Nothing
@@ -148,7 +160,8 @@ MainFrame::MainFrame()
     // SetMargins for multiline text on GTK, so its first character sits hard
     // against the frame. Read-only and unlexed, it is just a text pane with a
     // margin that works.
-    details_ = new wxStyledTextCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    auto* details_panel = new wxPanel(this);
+    details_ = new wxStyledTextCtrl(details_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                     wxBORDER_NONE);
     details_->SetReadOnly(true);
     details_->SetLexer(wxSTC_LEX_NULL);
@@ -166,51 +179,62 @@ MainFrame::MainFrame()
     details_->SetExtraDescent(1);
     details_->StyleSetFont(wxSTC_STYLE_DEFAULT,
                            wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
+    titled(details_panel, _("Commit details"), details_);
 
-    files_ = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    auto* files_panel = new wxPanel(this);
+    files_ = new wxListCtrl(files_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                             wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
     // wxListCtrl has no internal margin, so a narrow blank column stands in
     // for one and keeps the first label off the border.
     files_->AppendColumn(wxEmptyString, wxLIST_FORMAT_LEFT, 8);
     files_->AppendColumn(_("Change"), wxLIST_FORMAT_LEFT, 90);
     files_->AppendColumn(_("File"), wxLIST_FORMAT_LEFT, 320);
+    titled(files_panel, _("Changed files"), files_);
 
-    diff_ = new repomancer::gui::DiffView(this);
+    auto* diff_panel = new wxPanel(this);
+    diff_ = new repomancer::gui::DiffView(diff_panel);
+    titled(diff_panel, _("Diff"), diff_);
 
-    refs_tree_ = new wxTreeCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    auto* refs_panel = new wxPanel(this);
+    refs_tree_ = new wxTreeCtrl(refs_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                 wxTR_HAS_BUTTONS | wxTR_HIDE_ROOT | wxTR_NO_LINES |
                                     wxTR_SINGLE | wxBORDER_NONE);
+    titled(refs_panel, _("Repository"), refs_tree_);
 
     // GitX-style master/detail: history on top, and below it the commit's
     // metadata, the files it touched, and the patch for whichever is selected.
     aui_.SetManagedWindow(this);
     aui_.AddPane(log_view_, wxAuiPaneInfo().CenterPane().Name("log"));
-    aui_.AddPane(refs_tree_, wxAuiPaneInfo()
+    aui_.AddPane(refs_panel, wxAuiPaneInfo()
                                  .Left()
                                  .Name("refs")
                                  .Caption(_("Repository"))
                                  .BestSize(230, -1)
                                  .MinSize(160, -1)
-                                 .CloseButton(false));
-    aui_.AddPane(details_, wxAuiPaneInfo()
+                                 .CloseButton(false)
+                                 .CaptionVisible(false));
+    aui_.AddPane(details_panel, wxAuiPaneInfo()
                                .Bottom()
                                .Name("details")
                                .Caption(_("Commit details"))
                                .BestSize(360, 260)
-                               .CloseButton(false));
-    aui_.AddPane(files_, wxAuiPaneInfo()
+                               .CloseButton(false)
+                                 .CaptionVisible(false));
+    aui_.AddPane(files_panel, wxAuiPaneInfo()
                              .Bottom()
                              .Name("files")
                              .Caption(_("Changed files"))
                              .BestSize(360, 260)
                              .CloseButton(false)
+                                 .CaptionVisible(false)
                              .Position(1));
-    aui_.AddPane(diff_, wxAuiPaneInfo()
+    aui_.AddPane(diff_panel, wxAuiPaneInfo()
                             .Bottom()
                             .Name("diff")
                             .Caption(_("Diff"))
                             .BestSize(520, 260)
                             .CloseButton(false)
+                                 .CaptionVisible(false)
                             .Position(2));
     aui_.Update();
     ApplyThemeToWidgets();
@@ -457,9 +481,9 @@ void MainFrame::ApplyThemeToWidgets() {
     auto* art = new wxAuiDefaultDockArt;
     aui_.SetArtProvider(art);
 
-    // Pane captions are styled as column headers, so a docked pane is
-    // labelled the same way the log's columns are: flat, in the button face
-    // colour, with the interface font rather than wxAUI's gradient bar.
+    // Panes are titled by their own header controls, so wxAUI's caption is
+    // hidden; what remains to match is the surface it draws between and
+    // behind them.
     const wxColour header_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
     const wxColour header_fg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
     const wxFont header_font = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
@@ -473,14 +497,11 @@ void MainFrame::ApplyThemeToWidgets() {
     art->SetColour(wxAUI_DOCKART_SASH_COLOUR, header_bg);
     art->SetColour(wxAUI_DOCKART_BACKGROUND_COLOUR, header_bg);
     art->SetFont(wxAUI_DOCKART_CAPTION_FONT, header_font);
-    art->SetMetric(wxAUI_DOCKART_PANE_BORDER_SIZE, 1);
+    // No pane frame: wxAUI draws it as a dotted rectangle around every docked
+    // pane, which reads as stray dashes now that the panes are titled by their
+    // own headers. The sash between panes is separation enough.
+    art->SetMetric(wxAUI_DOCKART_PANE_BORDER_SIZE, 0);
 
-    // Sized from the same font the header draws with, so the two read as the
-    // same kind of strip. The control's own header cannot be measured here:
-    // wxDataViewCtrl only exposes it in its generic implementation, and GTK
-    // uses the native one.
-    art->SetMetric(wxAUI_DOCKART_CAPTION_SIZE,
-                   GetTextExtent("Ag").GetHeight() + 10);
 
     aui_.Update();
 
