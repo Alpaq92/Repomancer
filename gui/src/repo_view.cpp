@@ -44,8 +44,7 @@ public:
             width = wxMax(width, extent.GetWidth());
             height += extent.GetHeight() + kLeading;
         }
-        return wxSize(width + 2 * (kMargin + kPadding),
-                      height + kPadding + 2 * kMargin);
+        return wxSize(width + 2 * kPadding, height + kPadding);
     }
 
     bool Render(wxRect cell, wxDC* dc, int state) override {
@@ -55,15 +54,14 @@ public:
             selected ? wxSYS_COLOUR_HIGHLIGHTTEXT : wxSYS_COLOUR_WINDOWTEXT);
         const wxColour bg = wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX);
 
-        // The cell's outline, inset by a margin so it reads as a table cell
-        // rather than as text floating under the header. The line colour is a
-        // blend of the theme's own text and background, so it stays a subtle
-        // hairline in both light and dark.
+        // The table's own grid: the cell is outlined at its edges, so its
+        // sides continue the pane's boundary down from the header and the
+        // bottom line closes the row. The colour is blended from the theme's
+        // text and background, a subtle hairline in light and dark alike.
         const auto blend = [](int a, int b) { return (a * 30 + b * 70) / 100; };
         const wxColour border(blend(fg.Red(), bg.Red()), blend(fg.Green(), bg.Green()),
                               blend(fg.Blue(), bg.Blue()));
-        wxRect box = cell;
-        box.Deflate(kMargin, kMargin);
+        const wxRect box = cell;
         dc->SetPen(wxPen(border, 1));
         dc->SetBrush(*wxTRANSPARENT_BRUSH);
         dc->DrawRectangle(box);
@@ -82,8 +80,7 @@ public:
     }
 
 private:
-    static constexpr int kMargin = 6;  // cell edge to outline
-    static constexpr int kPadding = 8; // outline to text
+    static constexpr int kPadding = 8; // cell edge to text
     static constexpr int kLeading = 3;
 
     std::vector<wxString> lines_;
