@@ -12,11 +12,21 @@
 #include <wx/colour.h>
 #include <wx/dataview.h>
 
+#include <string_view>
 #include <vector>
 
 namespace repomancer::gui {
 
-// Lane colours: Tableau-10 hues, legible on light and dark backgrounds.
+// How a line moves between lanes.
+enum class GraphStyle {
+    Rounded, // the diagonal eased into the lane at both ends
+    Angular, // straight diagonals — the Git Extensions / git-graph look
+};
+
+[[nodiscard]] GraphStyle graph_style_from_string(std::string_view value);
+[[nodiscard]] const char* graph_style_to_string(GraphStyle style);
+
+// Lane colours: Open Color shade 6, legible on light and dark backgrounds.
 [[nodiscard]] wxColour lane_colour(int index);
 
 class GraphRenderer : public wxDataViewCustomRenderer {
@@ -30,6 +40,7 @@ public:
     bool Render(wxRect cell, wxDC* dc, int state) override;
 
     void SetMaxLanes(int lanes) { max_lanes_ = lanes < 1 ? 1 : lanes; }
+    void SetStyle(GraphStyle style) { style_ = style; }
 
     // Row pitch of the owning control. The renderer reports exactly this
     // height so its cell spans the whole row — otherwise the control centres a
@@ -42,6 +53,7 @@ private:
     const std::vector<repomancer::vcs::GraphRow>* rows_;
     long row_index_ = -1;
     int max_lanes_ = 1;
+    GraphStyle style_ = GraphStyle::Rounded;
 };
 
 } // namespace repomancer::gui

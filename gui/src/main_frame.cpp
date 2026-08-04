@@ -42,6 +42,8 @@ enum {
     ID_ThemeSystem = wxID_HIGHEST + 1,
     ID_ThemeLight,
     ID_ThemeDark,
+    ID_StyleRounded,
+    ID_StyleAngular,
 };
 } // namespace
 
@@ -57,8 +59,13 @@ MainFrame::MainFrame()
     theme_menu->AppendRadioItem(ID_ThemeSystem, _("&System"));
     theme_menu->AppendRadioItem(ID_ThemeLight, _("&Light"));
     theme_menu->AppendRadioItem(ID_ThemeDark, _("&Dark"));
+    auto* style_menu = new wxMenu;
+    style_menu->AppendRadioItem(ID_StyleRounded, _("&Rounded"));
+    style_menu->AppendRadioItem(ID_StyleAngular, _("&Angular"));
+
     auto* view_menu = new wxMenu;
     view_menu->AppendSubMenu(theme_menu, _("&Theme"));
+    view_menu->AppendSubMenu(style_menu, _("&Graph style"));
 
     auto* help_menu = new wxMenu;
     help_menu->Append(wxID_ABOUT);
@@ -70,6 +77,11 @@ MainFrame::MainFrame()
     SetMenuBar(menu_bar);
 
     const auto startup_settings = repomancer::load_settings();
+    const auto startup_style =
+        repomancer::gui::graph_style_from_string(startup_settings.graph_style);
+    style_menu->Check(startup_style == repomancer::gui::GraphStyle::Angular ? ID_StyleAngular
+                                                                           : ID_StyleRounded,
+                      true);
 
     switch (repomancer::gui::theme_mode_from_string(startup_settings.theme)) {
     case ThemeMode::Light:
@@ -95,6 +107,7 @@ MainFrame::MainFrame()
     log_view_->SetRowHeight(repomancer::gui::GraphRenderer::kRowHeight);
 
     graph_renderer_ = new repomancer::gui::GraphRenderer(&model_->graph_rows());
+    graph_renderer_->SetStyle(startup_style);
     graph_column_ = new wxDataViewColumn(_("Graph"), graph_renderer_, CommitLogModel::Col_Graph,
                                          60, wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE);
     log_view_->AppendColumn(graph_column_);
@@ -179,6 +192,7 @@ MainFrame::MainFrame()
 
     Bind(wxEVT_MENU, &MainFrame::OnOpenRepository, this, wxID_OPEN);
     Bind(wxEVT_MENU, &MainFrame::OnThemeSelected, this, ID_ThemeSystem, ID_ThemeDark);
+    Bind(wxEVT_MENU, &MainFrame::OnGraphStyleSelected, this, ID_StyleRounded, ID_StyleAngular);
     Bind(wxEVT_MENU, &MainFrame::OnQuit, this, wxID_EXIT);
     Bind(wxEVT_MENU, &MainFrame::OnAbout, this, wxID_ABOUT);
     log_view_->Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, &MainFrame::OnCommitSelected, this);
@@ -354,6 +368,17 @@ void MainFrame::ShowFileDiff(long index) {
         return;
     }
     diff_->ShowDiff(diff.value());
+}
+
+void MainFrame::OnGraphStyleSelected(wxCommandEvent& event) {
+    const auto style = event.GetId() == ID_StyleAngular ? repomancer::gui::GraphStyle::Angular
+                                                        : repomancer::gui::GraphStyle::Rounded;
+    graph_renderer_->SetStyle(style);
+    log_view_->Refresh();
+
+    auto settings = repomancer::load_settings();
+    settings.graph_style = repomancer::gui::graph_style_to_string(style);
+    repomancer::save_settings(settings);
 }
 
 void MainFrame::OnThemeSelected(wxCommandEvent& event) {
