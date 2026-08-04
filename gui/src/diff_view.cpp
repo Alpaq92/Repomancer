@@ -17,7 +17,6 @@ enum DiffStyle {
     Style_HunkHeader,
     Style_FileHeader,
     Style_Meta,
-    Style_Pad, // the leading blank line, shrunk to act as a top inset
 };
 
 // Open Color, matched to the lane palette (see graph_renderer.cpp). The tinted
@@ -64,11 +63,13 @@ DiffView::DiffView(wxWindow* parent, wxWindowID id) : wxStyledTextCtrl(parent, i
     SetMarginWidth(1, 0);
     SetMarginWidth(2, 0);
     // Blank space Scintilla keeps between its border and the text itself, so
-    // the first character is not pressed against the frame. A little extra
-    // leading opens the lines up at the same time.
+    // the first character is not pressed against the frame. It has no top
+    // margin, and one uniform line height for the document, so the space above
+    // the first line can only come from extra ascent — which applies to every
+    // line and doubles as leading.
     SetMarginLeft(10);
     SetMarginRight(10);
-    SetExtraAscent(2);
+    SetExtraAscent(5);
     SetExtraDescent(1);
 
     ApplyTheme();
@@ -97,9 +98,6 @@ void DiffView::ApplyTheme() {
     StyleSetForeground(Style_FileHeader, window_fg);
     StyleSetBold(Style_FileHeader, true);
     StyleSetForeground(Style_Meta, dark ? kMetaFgDark : kMetaFg);
-    // Scintilla sizes a line by the styles on it, so a tiny font on the blank
-    // leading line turns a full line height into a few pixels of top inset.
-    StyleSetSize(Style_Pad, 2);
     Refresh();
 }
 
@@ -113,10 +111,9 @@ void DiffView::SetReadOnlyText(const wxString& text) {
 void DiffView::Clear() { SetReadOnlyText(wxEmptyString); }
 
 void DiffView::ShowMessage(const wxString& message) {
-    SetReadOnlyText(" \n" + message);
+    SetReadOnlyText(message);
     StartStyling(0);
-    SetStyling(2, Style_Pad); // the space and newline forming the top inset
-    SetStyling(GetTextLength() - 2, Style_Meta);
+    SetStyling(GetTextLength(), Style_Meta);
 }
 
 void DiffView::ShowDiff(const std::vector<repomancer::vcs::FileDiff>& files) {
@@ -133,12 +130,6 @@ void DiffView::ShowDiff(const std::vector<repomancer::vcs::FileDiff>& files) {
         text += with_eol;
         runs.emplace_back(with_eol.utf8_str().length(), style);
     };
-
-    // Scintilla has no top margin, so the inset above the first line is a
-    // near-empty line inside the document, shrunk by its style. It carries a
-    // space because Scintilla measures a truly empty line with the default
-    // style, which would keep its full height.
-    append(" ", Style_Pad);
 
     for (const auto& file : files) {
         const wxString name = file.new_path.empty() ? wxString::FromUTF8(file.old_path)

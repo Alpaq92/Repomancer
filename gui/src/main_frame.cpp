@@ -156,7 +156,12 @@ MainFrame::MainFrame()
     }
     details_->SetMarginLeft(10);
     details_->SetMarginRight(10);
-    details_->SetExtraAscent(2);
+    // Scintilla has no top margin and one uniform line height for the whole
+    // document, so a short pad line is not possible: extra ascent is the only
+    // space it will put above text, and it applies to every line. That reads
+    // as an inset at the top and slightly airier lines below it.
+    details_->SetExtraAscent(5);
+    details_->SetExtraDescent(1);
     details_->StyleSetFont(wxSTC_STYLE_DEFAULT,
                            wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
 
@@ -378,9 +383,6 @@ void MainFrame::ApplyThemeToWidgets() {
     details_->StyleSetBackground(wxSTC_STYLE_DEFAULT,
                                  wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
     details_->StyleClearAll();
-    // Style 1 exists only to shrink the blank leading line into a small top
-    // inset — Scintilla sizes a line by the styles used on it.
-    details_->StyleSetSize(1, 2);
 
     diff_->ApplyTheme();
 
@@ -396,14 +398,7 @@ void MainFrame::SetDetailsText(const wxString& text) {
     details_->SetReadOnly(false);
     // A blank leading line is the only top inset Scintilla offers; padding it
     // from outside would move the control itself off the pane edge.
-    // The pad line carries a space: Scintilla measures an empty line with the
-    // default style, so without a character to hold the small style the line
-    // keeps its full height.
-    details_->SetText(text.empty() ? text : " \n" + text);
-    if (!text.empty()) {
-        details_->StartStyling(0);
-        details_->SetStyling(2, 1); // the space and its newline
-    }
+    details_->SetText(text);
     details_->SetReadOnly(true);
 }
 
