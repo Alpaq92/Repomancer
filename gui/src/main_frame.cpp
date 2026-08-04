@@ -198,13 +198,20 @@ MainFrame::MainFrame()
 
     // The sidebar is a one-column, one-row table: its column header is the
     // pane title, and the row's only cell carries the repository details. It
-    // sits inset in its pane so the table's own outline is visible all round.
+    // floats exactly like the history table: top and bottom at its dock edges,
+    // the sash as its right gap, and a left margin of one sash width so the
+    // window edge keeps the same distance every other pane gets.
     repo_panel_ = new wxPanel(this);
     repo_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
     repo_view_ = new repomancer::gui::RepoView(repo_panel_);
+    repo_view_->SetOnActivate(
+        [this](const repomancer::gui::RepoView::Target& target) { JumpToRef(target); });
     {
-        auto* sizer = new wxBoxSizer(wxVERTICAL);
-        sizer->Add(repo_view_, 1, wxEXPAND | wxALL, 8);
+        // Horizontal: a spacer, sized once the dock layout is known, then the
+        // table filling the rest.
+        auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+        repo_margin_ = sizer->AddSpacer(0);
+        sizer->Add(repo_view_, 1, wxEXPAND);
         repo_panel_->SetSizer(sizer);
     }
 
@@ -230,7 +237,6 @@ MainFrame::MainFrame()
             pane->Refresh();
         });
     };
-    outlined(repo_panel_, repo_view_);
     outlined(details_panel_, details_table);
 
     // GitX-style master/detail: history on top, and below it the commit's
@@ -269,6 +275,21 @@ MainFrame::MainFrame()
                                  .CaptionVisible(false)
                             .Position(2));
     aui_.Update();
+
+    // The window edge must keep the same distance from the sidebar table that
+    // the dock layout leaves between the sidebar and the history table. That
+    // gap is more than the sash metric alone, so it is measured off the
+    // laid-out windows rather than derived from art settings.
+    CallAfter([this] {
+        const int gap = log_view_->GetScreenPosition().x -
+                        (repo_panel_->GetScreenPosition().x +
+                         repo_panel_->GetSize().GetWidth());
+        if (gap > 0 && repo_margin_ != nullptr) {
+            repo_margin_->AssignSpacer(gap, 0);
+            repo_panel_->Layout();
+            repo_panel_->Refresh();
+        }
+    });
     ApplyThemeToWidgets();
 
     Bind(wxEVT_MENU, &MainFrame::OnOpenRepository, this, wxID_OPEN);
@@ -380,11 +401,19 @@ void MainFrame::PopulateRepoDetails() {
     };
 
     wxString details;
-    const auto section = [&details](const wxString& title) {
+    std::vector<repomancer::gui::RepoView::Target> targets;
+    // Text and targets stay in lockstep: one target entry per line, empty for
+    // lines that are not a ref.
+    const auto add_line = [&](const wxString& text,
+                              repomancer::gui::RepoView::Target target = {}) {
+        details += text + "\n";
+        targets.push_back(std::move(target));
+    };
+    const auto section = [&](const wxString& title) {
         if (!details.empty()) {
-            details += "\n";
+            add_line(wxEmptyString);
         }
-        details += title + "\n";
+        add_line(title);
     };
 
     const auto refs = GitDriver().refs(repo_path_);
@@ -392,7 +421,7 @@ void MainFrame::PopulateRepoDetails() {
         struct Group {
             repomancer::vcs::RefKind kind;
             wxString title;
-            wxString body;
+            std::vector<std::pair<wxString, repomancer::gui::RepoView::Target>> items;
         };
         Group groups[] = {
             {repomancer::vcs::RefKind::LocalBranch, _("Branches"), {}},
@@ -406,19 +435,24 @@ void MainFrame::PopulateRepoDetails() {
             if (group == std::end(groups)) {
                 continue;
             }
-            group->body += "  " + clean(ref.short_name);
+            wxString line = "  " + clean(ref.short_name);
             if (ref.is_head) {
-                group->body += " \u2713";
+                line += " \u2713";
             }
             if (!ref.upstream.empty()) {
-                group->body += " \u2192 " + clean(ref.upstream);
+                line += " \u2192 " + clean(ref.upstream);
             }
-            group->body += "\n";
+            group->items.emplace_back(
+                line, repomancer::gui::RepoView::Target{
+                          wxString::FromUTF8(ref.target),
+                          wxString::FromUTF8(ref.short_name)});
         }
-        for (const auto& group : groups) {
-            if (!group.body.empty()) {
+        for (auto& group : groups) {
+            if (!group.items.empty()) {
                 section(group.title);
-                details += group.body;
+                for (auto& item : group.items) {
+                    add_line(item.first, std::move(item.second));
+                }
             }
         }
     }
@@ -427,11 +461,10 @@ void MainFrame::PopulateRepoDetails() {
     if (people.ok() && !people.value().empty()) {
         section(_("Contributors"));
         for (const auto& person : people.value()) {
-            details += "  " + clean(person.name) +
-                       wxString::Format(wxPLURAL(" (%d commit)", " (%d commits)",
-                                                 person.commits),
-                                        person.commits) +
-                       "\n";
+            add_line("  " + clean(person.name) +
+                     wxString::Format(wxPLURAL(" (%d commit)", " (%d commits)",
+                                               person.commits),
+                                      person.commits));
         }
     }
 
@@ -442,14 +475,54 @@ void MainFrame::PopulateRepoDetails() {
             const wxString share = language.percent < 0.05
                                        ? wxString("<0.1%")
                                        : wxString::Format("%.1f%%", language.percent);
-            details += "  " + clean(language.name) + "  " + share + "\n";
+            add_line("  " + clean(language.name) + "  " + share);
         }
     }
 
     if (details.empty()) {
-        details = _("No repository information");
+        add_line(_("No repository information"));
     }
-    repo_view_->SetDetails(details);
+    repo_view_->SetDetails(details, std::move(targets));
+}
+
+void MainFrame::JumpToRef(const repomancer::gui::RepoView::Target& target) {
+    const std::string hash(target.hash.utf8_str());
+    const std::string name(target.name.utf8_str());
+    const unsigned int count = model_->GetCount();
+    for (unsigned int row = 0; row < count; ++row) {
+        const auto* commit = model_->commit_at(row);
+        if (commit == nullptr) {
+            continue;
+        }
+        // A branch names its tip commit outright. An annotated tag names a
+        // tag object the log has no row for, so its name is matched against
+        // the row decorations instead.
+        bool match = !hash.empty() && commit->hash == hash;
+        std::string_view rest = commit->refs;
+        while (!match && !name.empty() && !rest.empty()) {
+            const std::size_t comma = rest.find(", ");
+            std::string_view ref = rest.substr(0, comma);
+            rest = comma == std::string_view::npos ? std::string_view{}
+                                                   : rest.substr(comma + 2);
+            constexpr std::string_view kHeadArrow = "HEAD -> ";
+            constexpr std::string_view kTag = "tag: ";
+            if (ref.substr(0, kHeadArrow.size()) == kHeadArrow) {
+                ref = ref.substr(kHeadArrow.size());
+            } else if (ref.substr(0, kTag.size()) == kTag) {
+                ref = ref.substr(kTag.size());
+            }
+            match = ref == name;
+        }
+        if (match) {
+            const wxDataViewItem item = model_->GetItem(row);
+            log_view_->Select(item);
+            log_view_->EnsureVisible(item);
+            wxDataViewEvent selected(wxEVT_DATAVIEW_SELECTION_CHANGED, log_view_,
+                                     graph_column_, item);
+            OnCommitSelected(selected);
+            return;
+        }
+    }
 }
 
 void MainFrame::RestartForTheme() {

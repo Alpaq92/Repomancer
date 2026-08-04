@@ -48,6 +48,9 @@ private:
     // Relaunches the application so a new theme actually takes effect.
     void RestartForTheme();
     void PopulateRepoDetails();
+    // Selects the log row the target names — by commit id, or failing that by
+    // the ref name in the row's decorations.
+    void JumpToRef(const repomancer::gui::RepoView::Target& target);
     // Sizes every column to its content and lets Subject absorb the rest.
     void FitColumns();
 
@@ -55,6 +58,7 @@ private:
     wxDataViewCtrl* log_view_ = nullptr;
     wxStyledTextCtrl* details_ = nullptr;
     wxPanel* repo_panel_ = nullptr;
+    wxSizerItem* repo_margin_ = nullptr;
     wxPanel* details_panel_ = nullptr;
     repomancer::gui::RepoView* repo_view_ = nullptr;
     wxListCtrl* files_ = nullptr;

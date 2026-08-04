@@ -9,20 +9,41 @@
 
 #include <wx/dataview.h>
 
-#include <string>
+#include <functional>
+#include <vector>
 
 namespace repomancer::gui {
 
 class RepoView : public wxDataViewListCtrl {
 public:
+    // What a line in the details block points at: the object it names, and
+    // the name itself for when that object is not in the log — an annotated
+    // tag's id is the tag object, not the commit it marks.
+    struct Target {
+        wxString hash;
+        wxString name;
+        [[nodiscard]] bool empty() const { return hash.empty() && name.empty(); }
+    };
+
     explicit RepoView(wxWindow* parent);
 
     // Replaces the cell's contents. Lines without a leading space are drawn
-    // as section headings.
-    void SetDetails(const wxString& details);
+    // as section headings. `targets` pairs with the lines of `details`; a
+    // click on a line whose entry is non-empty activates it.
+    void SetDetails(const wxString& details, std::vector<Target> targets = {});
+
+    void SetOnActivate(std::function<void(const Target&)> handler) {
+        on_activate_ = std::move(handler);
+    }
 
 private:
+    // The line under `point`, in the control's client coordinates, or -1.
+    [[nodiscard]] int LineAt(const wxPoint& point);
+
     wxDataViewColumn* column_ = nullptr;
+    std::vector<wxString> lines_;
+    std::vector<Target> targets_;
+    std::function<void(const Target&)> on_activate_;
 };
 
 } // namespace repomancer::gui

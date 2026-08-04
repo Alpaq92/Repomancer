@@ -5,12 +5,32 @@
 
 #include <wx/dc.h>
 #include <wx/settings.h>
+#include <wx/utils.h>
 
 #include <vector>
 
 namespace repomancer::gui {
 
 namespace {
+
+// Shared by the renderer and the click hit-test, which must agree on where
+// each line sits.
+constexpr int kPadding = 8; // cell edge to text
+constexpr int kLeading = 3;
+
+std::vector<wxString> split_lines(const wxString& text) {
+    std::vector<wxString> lines;
+    wxString rest = text;
+    while (!rest.empty()) {
+        lines.push_back(rest.BeforeFirst('\n'));
+        const int eol = rest.Find('\n');
+        if (eol == wxNOT_FOUND) {
+            break;
+        }
+        rest = rest.Mid(eol + 1);
+    }
+    return lines;
+}
 
 // Draws the one cell: a block of lines, headings bold. A stock text renderer
 // shows a single line only, which is no use for a cell that carries the whole
@@ -21,16 +41,7 @@ public:
         : wxDataViewCustomRenderer("string", wxDATAVIEW_CELL_INERT, wxALIGN_LEFT) {}
 
     bool SetValue(const wxVariant& value) override {
-        lines_.clear();
-        wxString rest = value.GetString();
-        while (!rest.empty()) {
-            lines_.push_back(rest.BeforeFirst('\n'));
-            const int eol = rest.Find('\n');
-            if (eol == wxNOT_FOUND) {
-                break;
-            }
-            rest = rest.Mid(eol + 1);
-        }
+        lines_ = split_lines(value.GetString());
         return true;
     }
 
@@ -67,9 +78,6 @@ public:
     }
 
 private:
-    static constexpr int kPadding = 8; // cell edge to text
-    static constexpr int kLeading = 3;
-
     std::vector<wxString> lines_;
 };
 
@@ -92,9 +100,53 @@ RepoView::RepoView(wxWindow* parent)
             column_->SetWidth(GetClientSize().GetWidth());
         }
     });
+
+    // The table has exactly one row, so selecting it means nothing — the
+    // click's position is what carries the intent. A click on a line that
+    // names a ref activates that ref, and the selection is dropped again so
+    // the block does not light up as one big selected cell.
+    Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, [this](wxDataViewEvent& event) {
+        event.Skip();
+        if (event.GetItem().IsOk()) {
+            const int line = LineAt(ScreenToClient(wxGetMousePosition()));
+            if (line >= 0 && line < static_cast<int>(targets_.size()) &&
+                !targets_[line].empty() && on_activate_) {
+                on_activate_(targets_[line]);
+            }
+        }
+        CallAfter([this] { UnselectAll(); });
+    });
 }
 
-void RepoView::SetDetails(const wxString& details) {
+int RepoView::LineAt(const wxPoint& point) {
+    if (GetItemCount() == 0) {
+        return -1;
+    }
+    const wxRect cell = GetItemRect(RowToItem(0), column_);
+    if (!cell.Contains(point)) {
+        return -1;
+    }
+    // The same walk the renderer paints by: kPadding of headroom, then each
+    // line's own height plus its leading.
+    int y = cell.GetTop() + kPadding;
+    for (std::size_t i = 0; i < lines_.size(); ++i) {
+        if (point.y < y) {
+            return -1; // in the headroom above the first line
+        }
+        const wxString& line = lines_[i];
+        const int height =
+            GetTextExtent(line.empty() ? wxString(" ") : line).GetHeight() + kLeading;
+        if (point.y < y + height) {
+            return static_cast<int>(i);
+        }
+        y += height;
+    }
+    return -1;
+}
+
+void RepoView::SetDetails(const wxString& details, std::vector<Target> targets) {
+    lines_ = split_lines(details);
+    targets_ = std::move(targets);
     DeleteAllItems();
     wxVector<wxVariant> row;
     row.push_back(wxVariant(details));
