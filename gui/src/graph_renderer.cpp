@@ -195,9 +195,36 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
             for (const auto& curve : curves) {
                 gc->SetPen(graph_pen(curve.colour));
                 if (style_ == GraphStyle::Angular) {
-                    // Git Extensions / git-graph: the line runs straight from
-                    // where it leaves to where it arrives.
-                    gc->StrokeLine(curve.x1, curve.y1, curve.x2, curve.y2);
+                    // Orthogonal routing: the line only ever runs straight up,
+                    // down or across, turning through square corners. Which leg
+                    // comes first is fixed by the boundary — whichever end sits
+                    // on a row edge has to arrive vertically, or the next row
+                    // resumes the lane at the wrong x.
+                    wxPen pen = graph_pen(curve.colour);
+                    pen.SetJoin(wxJOIN_MITER); // square corners, not rounded
+                    gc->SetPen(pen);
+
+                    wxGraphicsPath path = gc->CreatePath();
+                    path.MoveToPoint(curve.x1, curve.y1);
+                    switch (curve.kind) {
+                    case CurveKind::FromDot:
+                        // Out of the dot sideways, then down into the lane.
+                        path.AddLineToPoint(curve.x2, curve.y1);
+                        break;
+                    case CurveKind::IntoDot:
+                        // Down the lane, then across into the dot.
+                        path.AddLineToPoint(curve.x1, curve.y2);
+                        break;
+                    case CurveKind::Crossing: {
+                        // Down, across, and down again — both ends upright.
+                        const double mid = (curve.y1 + curve.y2) / 2.0;
+                        path.AddLineToPoint(curve.x1, mid);
+                        path.AddLineToPoint(curve.x2, mid);
+                        break;
+                    }
+                    }
+                    path.AddLineToPoint(curve.x2, curve.y2);
+                    gc->StrokePath(path);
                     continue;
                 }
                 // A control point placed straight below its anchor holds the
