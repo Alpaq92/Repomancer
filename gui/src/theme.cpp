@@ -85,7 +85,17 @@ bool apply_theme(ThemeMode mode) {
         break;
     }
     g_object_set(settings, "gtk-application-prefer-dark-theme", prefer_dark, nullptr);
-    return true;
+    if (GdkScreen* screen = gdk_screen_get_default()) {
+        gtk_style_context_reset_widgets(screen);
+    }
+    // Reporting failure is not pessimism: the preference selects a different
+    // theme file, and GTK resolves that when a window is created, so windows
+    // that already exist keep the variant they were built with — resetting
+    // their style contexts re-reads the same one. Launching in a theme works;
+    // switching cannot, so the caller is told a restart is needed rather than
+    // being left with a setting that silently did nothing. wx 3.3's
+    // SetAppearance handles this properly, and that is the path releases take.
+    return false;
 }
 
 #else

@@ -160,7 +160,7 @@ MainFrame::MainFrame()
     // document, so a short pad line is not possible: extra ascent is the only
     // space it will put above text, and it applies to every line. That reads
     // as an inset at the top and slightly airier lines below it.
-    details_->SetExtraAscent(5);
+    details_->SetExtraAscent(7);
     details_->SetExtraDescent(1);
     details_->StyleSetFont(wxSTC_STYLE_DEFAULT,
                            wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
@@ -356,6 +356,38 @@ void MainFrame::PopulateRefs() {
             refs_tree_->SetItemBold(item, true);
         }
     }
+    // Repository-level summaries, in the spirit of a project page: who has
+    // been committing, and what the tracked content is written in.
+    const auto people = GitDriver().contributors(repo_path_);
+    if (people.ok() && !people.value().empty()) {
+        const wxTreeItemId contributors = refs_tree_->AppendItem(root, _("Contributors"));
+        for (const auto& person : people.value()) {
+            wxString label = wxString::FromUTF8(person.name);
+            label += wxString::Format(wxPLURAL("  (%d commit)", "  (%d commits)", person.commits),
+                                      person.commits);
+            const wxTreeItemId item = refs_tree_->AppendItem(contributors, label);
+            if (!person.email.empty()) {
+                refs_tree_->SetItemData(item,
+                                        new RefItemData(wxString::FromUTF8(person.email)));
+            }
+        }
+        refs_tree_->Expand(contributors);
+    }
+
+    const auto langs = GitDriver().languages(repo_path_);
+    if (langs.ok() && !langs.value().empty()) {
+        const wxTreeItemId languages = refs_tree_->AppendItem(root, _("Languages"));
+        for (const auto& language : langs.value()) {
+            // A share below a tenth of a percent would render as 0.0%.
+            const wxString share = language.percent < 0.05
+                                       ? wxString("<0.1%")
+                                       : wxString::Format("%.1f%%", language.percent);
+            refs_tree_->AppendItem(languages,
+                                   wxString::FromUTF8(language.name) + "  " + share);
+        }
+        refs_tree_->Expand(languages);
+    }
+
     for (const auto& group : groups) {
         if (group.id.IsOk()) {
             refs_tree_->Expand(group.id);
@@ -385,6 +417,19 @@ void MainFrame::ApplyThemeToWidgets() {
     details_->StyleClearAll();
 
     diff_->ApplyTheme();
+
+    // wxListCtrl and wxTreeCtrl are wx's own generic controls on GTK, not
+    // native ones, so they keep whatever colours they were given and do not
+    // follow a theme change by themselves.
+    const wxColour list_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX);
+    const wxColour list_fg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+    for (wxWindow* control : {static_cast<wxWindow*>(files_),
+                              static_cast<wxWindow*>(refs_tree_),
+                              static_cast<wxWindow*>(log_view_)}) {
+        control->SetBackgroundColour(list_bg);
+        control->SetForegroundColour(list_fg);
+        control->Refresh();
+    }
 
     // A fresh art provider is the supported way to make wxAUI re-read the
     // system palette; the existing one has no refresh entry point.

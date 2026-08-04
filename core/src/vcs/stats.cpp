@@ -121,21 +121,22 @@ std::string_view language_for_path(std::string_view path) {
         {"tex", "TeX"},      {"po", "Gettext"},
     };
 
+    // Names that carry their language regardless of extension — checked first,
+    // since CMakeLists.txt would otherwise be looked up as a .txt file.
+    const std::size_t slash = path.find_last_of('/');
+    const std::string_view name = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    if (name == "CMakeLists.txt") {
+        return "CMake";
+    }
+    if (name == "Makefile" || name == "makefile" || name == "GNUmakefile") {
+        return "Makefile";
+    }
+    if (name == "Dockerfile") {
+        return "Dockerfile";
+    }
+
     const std::string_view extension = extension_of(path);
     if (extension.empty()) {
-        // A few names carry their language without one.
-        const std::size_t slash = path.find_last_of('/');
-        const std::string_view name =
-            slash == std::string_view::npos ? path : path.substr(slash + 1);
-        if (name == "CMakeLists.txt") {
-            return "CMake";
-        }
-        if (name == "Makefile" || name == "makefile") {
-            return "Makefile";
-        }
-        if (name == "Dockerfile") {
-            return "Dockerfile";
-        }
         return {};
     }
 

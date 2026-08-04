@@ -125,6 +125,26 @@ VcsResult<std::vector<Ref>> GitDriver::refs(const std::filesystem::path& repo) c
     return parse_for_each_ref_z(run.out, config_.limits);
 }
 
+VcsResult<std::vector<Contributor>>
+GitDriver::contributors(const std::filesystem::path& repo) const {
+    const auto run = proc::ProcessRunner::run(
+        make_spec(&repo, {"shortlog", "--summary", "--numbered", "--email", "--all"}));
+    if (!run.ok()) {
+        return from_run_failure(run);
+    }
+    return parse_shortlog(run.out, config_.limits);
+}
+
+VcsResult<std::vector<LanguageStat>> GitDriver::languages(const std::filesystem::path& repo,
+                                                          const std::string& rev) const {
+    const auto run = proc::ProcessRunner::run(
+        make_spec(&repo, {"ls-tree", "-r", "-l", "--full-tree", "--end-of-options", rev}));
+    if (!run.ok()) {
+        return from_run_failure(run);
+    }
+    return parse_ls_tree_sizes(run.out, config_.limits);
+}
+
 VcsResult<std::vector<ChangedFile>>
 GitDriver::changed_files(const std::filesystem::path& repo, const std::string& commit) const {
     const auto run = proc::ProcessRunner::run(

@@ -69,7 +69,7 @@ DiffView::DiffView(wxWindow* parent, wxWindowID id) : wxStyledTextCtrl(parent, i
     // line and doubles as leading.
     SetMarginLeft(10);
     SetMarginRight(10);
-    SetExtraAscent(5);
+    SetExtraAscent(7);
     SetExtraDescent(1);
 
     ApplyTheme();
