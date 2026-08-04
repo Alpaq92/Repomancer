@@ -52,27 +52,14 @@ public:
         const bool selected = (state & wxDATAVIEW_CELL_SELECTED) != 0;
         const wxColour fg = wxSystemSettings::GetColour(
             selected ? wxSYS_COLOUR_HIGHLIGHTTEXT : wxSYS_COLOUR_WINDOWTEXT);
-        const wxColour bg = wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX);
-
-        // The table's own grid: the cell is outlined at its edges, so its
-        // sides continue the pane's boundary down from the header and the
-        // bottom line closes the row. The colour is blended from the theme's
-        // text and background, a subtle hairline in light and dark alike.
-        const auto blend = [](int a, int b) { return (a * 30 + b * 70) / 100; };
-        const wxColour border(blend(fg.Red(), bg.Red()), blend(fg.Green(), bg.Green()),
-                              blend(fg.Blue(), bg.Blue()));
-        const wxRect box = cell;
-        dc->SetPen(wxPen(border, 1));
-        dc->SetBrush(*wxTRANSPARENT_BRUSH);
-        dc->DrawRectangle(box);
 
         dc->SetTextForeground(fg);
-        int y = box.GetTop() + kPadding;
+        int y = cell.GetTop() + kPadding;
         for (const auto& line : lines_) {
             // A heading is any line that is not indented under one.
             const bool heading = !line.empty() && line[0] != ' ';
             dc->SetFont(heading ? base.Bold() : base);
-            dc->DrawText(line, box.GetLeft() + kPadding, y);
+            dc->DrawText(line, cell.GetLeft() + kPadding, y);
             y += dc->GetTextExtent(line.empty() ? " " : line).GetHeight() + kLeading;
         }
         dc->SetFont(base);
@@ -92,7 +79,10 @@ RepoView::RepoView(wxWindow* parent)
     : wxDataViewListCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                          // Variable line height: the row is as tall as its
                          // block of lines, instead of clipping to one line.
-                         wxDV_VARIABLE_LINE_HEIGHT | wxBORDER_NONE) {
+                         // The border outlines the whole table, header and
+                         // cell together; the margin around the widget is what
+                         // makes it visible against the pane.
+                         wxDV_VARIABLE_LINE_HEIGHT | wxBORDER_SIMPLE) {
     column_ = new wxDataViewColumn(_("Repository"), new DetailsRenderer(), 0,
                                    wxCOL_WIDTH_AUTOSIZE, wxALIGN_LEFT, 0);
     AppendColumn(column_, "string");

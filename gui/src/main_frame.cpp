@@ -184,15 +184,23 @@ MainFrame::MainFrame()
     diff_ = new repomancer::gui::DiffView(diff_panel);
     titled(diff_panel, _("Diff"), diff_);
 
-    // The sidebar is itself a one-column, one-row table: its column header is
-    // the pane title, and the row's only cell carries the repository details.
-    repo_view_ = new repomancer::gui::RepoView(this);
+    // The sidebar is a one-column, one-row table: its column header is the
+    // pane title, and the row's only cell carries the repository details. It
+    // sits inset in its pane so the table's own outline is visible all round.
+    repo_panel_ = new wxPanel(this);
+    repo_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    repo_view_ = new repomancer::gui::RepoView(repo_panel_);
+    {
+        auto* sizer = new wxBoxSizer(wxVERTICAL);
+        sizer->Add(repo_view_, 1, wxEXPAND | wxALL, 8);
+        repo_panel_->SetSizer(sizer);
+    }
 
     // GitX-style master/detail: history on top, and below it the commit's
     // metadata, the files it touched, and the patch for whichever is selected.
     aui_.SetManagedWindow(this);
     aui_.AddPane(log_view_, wxAuiPaneInfo().CenterPane().Name("log"));
-    aui_.AddPane(repo_view_, wxAuiPaneInfo()
+    aui_.AddPane(repo_panel_, wxAuiPaneInfo()
                                  .Left()
                                  .Name("refs")
                                  .Caption(_("Repository"))
@@ -444,6 +452,7 @@ void MainFrame::ApplyThemeToWidgets() {
     // follow a theme change by themselves.
     const wxColour list_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX);
     const wxColour list_fg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+    repo_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
     for (wxWindow* control : {static_cast<wxWindow*>(files_),
                               static_cast<wxWindow*>(repo_view_),
                               static_cast<wxWindow*>(log_view_)}) {

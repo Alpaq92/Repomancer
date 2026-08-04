@@ -54,6 +54,7 @@ private:
     wxAuiManager aui_;
     wxDataViewCtrl* log_view_ = nullptr;
     wxStyledTextCtrl* details_ = nullptr;
+    wxPanel* repo_panel_ = nullptr;
     repomancer::gui::RepoView* repo_view_ = nullptr;
     wxListCtrl* files_ = nullptr;
     repomancer::gui::DiffView* diff_ = nullptr;
