@@ -4,6 +4,7 @@
 #include <repomancer/vcs/graph.h>
 
 #include <algorithm>
+#include <unordered_map>
 
 namespace repomancer::vcs {
 
@@ -26,15 +27,26 @@ int find_lane_waiting_for(const std::vector<LaneState>& lanes, const std::string
     return kNoLane;
 }
 
-int allocate_lane(std::vector<LaneState>& lanes, int lane_cap) {
-    for (std::size_t i = 0; i < lanes.size(); ++i) {
+// `preferred` is the left-most lane this branch would like to occupy; the
+// search falls back to any free lane so a busy graph never stalls.
+int allocate_lane(std::vector<LaneState>& lanes, int lane_cap, int preferred = 0) {
+    preferred = std::clamp(preferred, 0, lane_cap - 1);
+    for (std::size_t i = static_cast<std::size_t>(preferred); i < lanes.size(); ++i) {
         if (lanes[i].waiting_for.empty()) {
             return static_cast<int>(i);
         }
     }
     if (static_cast<int>(lanes.size()) < lane_cap) {
+        while (static_cast<int>(lanes.size()) < preferred) {
+            lanes.emplace_back();
+        }
         lanes.emplace_back();
         return static_cast<int>(lanes.size()) - 1;
+    }
+    for (std::size_t i = 0; i < lanes.size(); ++i) {
+        if (lanes[i].waiting_for.empty()) {
+            return static_cast<int>(i);
+        }
     }
     // Pathological width: fold everything into the last lane rather than
     // growing without bound.
@@ -53,12 +65,41 @@ int active_width(const std::vector<LaneState>& lanes) {
 
 } // namespace
 
-GraphLayout compute_graph_layout(const std::vector<Commit>& commits, int lane_cap) {
+GraphLayout compute_graph_layout(const std::vector<Commit>& commits,
+                                 const GraphOptions& options) {
     GraphLayout layout;
     layout.rows.reserve(commits.size());
-    if (lane_cap < 1) {
-        lane_cap = 1;
+    const int lane_cap = std::max(1, options.lane_cap);
+
+    // A branch's identity lives on its tip, but the lane carrying it is often
+    // opened earlier — when a merge names it as a second parent. Indexing the
+    // classes up front lets every lane be placed and coloured by the branch it
+    // will eventually reach, not by whether we happened to meet the tip first.
+    std::unordered_map<std::string, BranchClass> class_by_hash;
+    if (!options.model.empty()) {
+        for (const auto& commit : commits) {
+            if (commit.refs.empty()) {
+                continue;
+            }
+            const BranchClass cls = options.model.classify_refs(commit.refs);
+            if (cls != BranchClass::Unknown) {
+                class_by_hash.emplace(commit.hash, cls);
+            }
+        }
     }
+    const auto class_of = [&](const std::string& hash) {
+        const auto it = class_by_hash.find(hash);
+        return it == class_by_hash.end() ? BranchClass::Unknown : it->second;
+    };
+    // An unidentified branch expresses no preference and takes the first free
+    // lane. A known one aims for its class's column, but never past the lanes
+    // already in use — reserving columns nothing occupies yet would leave empty
+    // gutters down the whole graph.
+    const auto preferred_lane = [](BranchClass cls, std::size_t lanes_in_use) {
+        return cls == BranchClass::Unknown
+                   ? 0
+                   : std::min(branch_class_order(cls), static_cast<int>(lanes_in_use));
+    };
 
     std::vector<LaneState> lanes;
     int next_color = 0;
@@ -75,9 +116,13 @@ GraphLayout compute_graph_layout(const std::vector<Commit>& commits, int lane_ca
         }
 
         if (row.children_in.empty()) {
-            // A branch head nobody pointed at yet.
-            row.lane = allocate_lane(lanes, lane_cap);
-            lanes[static_cast<std::size_t>(row.lane)].color = next_color++;
+            // A branch head nobody pointed at yet: its refs say which branch
+            // it is, so the lane can be placed and coloured by class.
+            const BranchClass cls = class_of(commit.hash);
+            row.lane = allocate_lane(lanes, lane_cap, preferred_lane(cls, lanes.size()));
+            const int class_color = branch_class_color(cls);
+            lanes[static_cast<std::size_t>(row.lane)].color =
+                class_color >= 0 ? class_color : next_color++;
         } else {
             row.lane = row.children_in.front().lane;
         }
@@ -105,9 +150,12 @@ GraphLayout compute_graph_layout(const std::vector<Commit>& commits, int lane_ca
                 const auto& parent = commit.parents[p];
                 int lane = find_lane_waiting_for(lanes, parent);
                 if (lane == kNoLane) {
-                    lane = allocate_lane(lanes, lane_cap);
+                    const BranchClass cls = class_of(parent);
+                    lane = allocate_lane(lanes, lane_cap, preferred_lane(cls, lanes.size()));
                     lanes[static_cast<std::size_t>(lane)].waiting_for = parent;
-                    lanes[static_cast<std::size_t>(lane)].color = next_color++;
+                    const int class_color = branch_class_color(cls);
+                    lanes[static_cast<std::size_t>(lane)].color =
+                        class_color >= 0 ? class_color : next_color++;
                 }
                 const auto same_lane = [lane](const GraphEdge& edge) {
                     return edge.lane == lane;

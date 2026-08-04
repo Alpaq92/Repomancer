@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <repomancer/vcs/branch_model.h>
 #include <repomancer/vcs/model.h>
 
 #include <cstddef>
@@ -53,10 +54,19 @@ struct GraphLayout {
     int max_lanes = 0;
 };
 
+struct GraphOptions {
+    int lane_cap = 64;
+    // When a branch head can be classified from its refs, the lane it opens is
+    // placed according to the class's order (mainline left, topics right) and
+    // takes the class's colour. Default-constructed BranchModel::none() keeps
+    // the purely structural layout.
+    BranchModel model = BranchModel::git_flow();
+};
+
 // Commits must be in the order produced by `git log --topo-order` (children
 // before parents). Unknown parents (beyond the fetched window) simply keep
 // their lane open, which is what a truncated log should look like.
 [[nodiscard]] GraphLayout compute_graph_layout(const std::vector<Commit>& commits,
-                                               int lane_cap = 64);
+                                               const GraphOptions& options = {});
 
 } // namespace repomancer::vcs

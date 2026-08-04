@@ -33,6 +33,7 @@ TEST_CASE("log args: end-of-options discipline") {
     LogOptions options;
     options.max_count = 42;
     options.rev = "HEAD";
+    options.all_refs = false;
     const auto args = build_log_args(options);
 
     const auto eoo = std::find(args.begin(), args.end(), "--end-of-options");
@@ -42,6 +43,21 @@ TEST_CASE("log args: end-of-options discipline") {
     CHECK(*std::next(eoo) == "HEAD");
     CHECK(args.back() == "--");
     CHECK(std::find(args.begin(), args.end(), "--max-count=42") != args.end());
+    CHECK(std::find(args.begin(), args.end(), "--all") == args.end());
+}
+
+TEST_CASE("log args: all_refs replaces the revision with --all") {
+    LogOptions options;
+    options.all_refs = true;
+    const auto args = build_log_args(options);
+
+    CHECK(std::find(args.begin(), args.end(), "--all") != args.end());
+    // No revision may follow --end-of-options, or git would union it with --all.
+    const auto eoo = std::find(args.begin(), args.end(), "--end-of-options");
+    REQUIRE(eoo != args.end());
+    REQUIRE(std::next(eoo) != args.end());
+    CHECK(*std::next(eoo) == "--");
+    CHECK(args.back() == "--");
 }
 
 TEST_CASE("log format string shape") {

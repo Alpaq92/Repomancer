@@ -160,7 +160,7 @@ TEST_CASE("graph: lane cap bounds the width on pathological input") {
     octopus.parents = parents;
     commits.push_back(octopus);
 
-    const auto layout = compute_graph_layout(commits, /*lane_cap=*/8);
+    const auto layout = compute_graph_layout(commits, GraphOptions{.lane_cap = 8});
     CHECK(layout.max_lanes <= 8);
 }
 

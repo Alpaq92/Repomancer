@@ -53,17 +53,23 @@ std::string log_format_argument() {
 }
 
 std::vector<std::string> build_log_args(const LogOptions& options) {
-    return {
+    std::vector<std::string> args = {
         "log",
         "--topo-order",
         "-z",
         "--max-count=" + std::to_string(options.max_count),
         log_format_argument(),
-        // §13.1: nothing after this point is ever parsed as an option.
-        "--end-of-options",
-        options.rev,
-        "--",
     };
+    if (options.all_refs) {
+        args.emplace_back("--all");
+    }
+    // §13.1: nothing after this point is ever parsed as an option.
+    args.emplace_back("--end-of-options");
+    if (!options.all_refs) {
+        args.push_back(options.rev);
+    }
+    args.emplace_back("--");
+    return args;
 }
 
 VcsResult<std::vector<Commit>> parse_log_z(std::string_view data, const ParseLimits& limits) {

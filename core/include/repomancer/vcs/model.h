@@ -61,6 +61,9 @@ struct Commit {
 struct LogOptions {
     std::size_t max_count = 1000;
     std::string rev = "HEAD";
+    // Show every ref rather than just `rev`'s ancestry — what a history view
+    // is expected to display, and what gives the graph its branches.
+    bool all_refs = true;
 };
 
 enum class EntryKind {

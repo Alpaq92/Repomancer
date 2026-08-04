@@ -7,6 +7,8 @@ add_executable(repomancer-tests
   test_porcelain.cpp
   test_log_format.cpp
   test_graph.cpp
+  test_branch_model.cpp
+  test_graph_branch_layout.cpp
   test_process_runner.cpp
   test_settings.cpp
   test_git_integration.cpp
