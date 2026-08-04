@@ -12,7 +12,7 @@
 #include <wx/frame.h>
 #include <wx/listctrl.h>
 #include <wx/treectrl.h>
-#include <wx/textctrl.h>
+#include <wx/stc/stc.h>
 
 #include <atomic>
 #include <filesystem>
@@ -42,13 +42,14 @@ private:
     void ShowFileDiff(long index);
     // Forces every visible row to be re-rendered, preserving the selection.
     void RefreshLogRows();
+    void SetDetailsText(const wxString& text);
     void PopulateRefs();
     // Sizes every column to its content and lets Subject absorb the rest.
     void FitColumns();
 
     wxAuiManager aui_;
     wxDataViewCtrl* log_view_ = nullptr;
-    wxTextCtrl* details_ = nullptr;
+    wxStyledTextCtrl* details_ = nullptr;
     wxTreeCtrl* refs_tree_ = nullptr;
     wxListCtrl* files_ = nullptr;
     repomancer::gui::DiffView* diff_ = nullptr;

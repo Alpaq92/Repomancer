@@ -62,6 +62,13 @@ DiffView::DiffView(wxWindow* parent, wxWindowID id) : wxStyledTextCtrl(parent, i
     SetMarginWidth(0, 0); // patch lines carry their own numbers
     SetMarginWidth(1, 0);
     SetMarginWidth(2, 0);
+    // Blank space Scintilla keeps between its border and the text itself, so
+    // the first character is not pressed against the frame. A little extra
+    // leading opens the lines up at the same time.
+    SetMarginLeft(10);
+    SetMarginRight(10);
+    SetExtraAscent(2);
+    SetExtraDescent(1);
 
     ApplyTheme();
 }

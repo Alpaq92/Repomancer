@@ -13,6 +13,7 @@
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
+#include <wx/settings.h>
 #include <wx/treectrl.h>
 #include <wx/sizer.h>
 
@@ -146,16 +147,36 @@ MainFrame::MainFrame()
     // honoured for multiline text on every port — with SetMargins on top for
     // the ports that do take it.
     auto* details_panel = new wxPanel(this);
-    details_ = new wxTextCtrl(details_panel, wxID_ANY, wxEmptyString, wxDefaultPosition,
-                              wxDefaultSize,
-                              wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP | wxBORDER_NONE);
-    details_->SetFont(wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
-    details_->SetMargins(wxPoint(6, 6));
+    // A styled text control rather than wxTextCtrl: the latter ignores
+    // SetMargins for multiline text on GTK, so its first character sits hard
+    // against the frame. Read-only and unlexed, it is just a text pane with a
+    // margin that works.
+    details_ = new wxStyledTextCtrl(details_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                    wxBORDER_NONE);
+    details_->SetReadOnly(true);
+    details_->SetLexer(wxSTC_LEX_NULL);
+    details_->SetWrapMode(wxSTC_WRAP_NONE);
+    for (int margin = 0; margin < 3; ++margin) {
+        details_->SetMarginWidth(margin, 0);
+    }
+    details_->SetMarginLeft(10);
+    details_->SetMarginRight(10);
+    details_->SetExtraAscent(2);
+    details_->StyleSetFont(wxSTC_STYLE_DEFAULT,
+                           wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
+    details_->StyleSetForeground(wxSTC_STYLE_DEFAULT,
+                                 wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
+    details_->StyleSetBackground(wxSTC_STYLE_DEFAULT,
+                                 wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
+    details_->StyleClearAll();
     pad(details_panel, details_);
 
     auto* files_panel = new wxPanel(this);
     files_ = new wxListCtrl(files_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                             wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
+    // wxListCtrl has no internal margin, so a narrow blank column stands in
+    // for one and keeps the first label off the border.
+    files_->AppendColumn(wxEmptyString, wxLIST_FORMAT_LEFT, 8);
     files_->AppendColumn(_("Change"), wxLIST_FORMAT_LEFT, 90);
     files_->AppendColumn(_("File"), wxLIST_FORMAT_LEFT, 320);
     pad(files_panel, files_);
@@ -239,7 +260,7 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
     const wxDataViewItem item = log_view_->GetSelection();
     const auto* commit = item.IsOk() ? model_->commit_at(model_->GetRow(item)) : nullptr;
     if (commit == nullptr) {
-        details_->ChangeValue(wxEmptyString);
+        SetDetailsText(wxEmptyString);
         files_->DeleteAllItems();
         changed_files_.clear();
         selected_commit_.clear();
@@ -266,7 +287,7 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
     if (!commit->body.empty()) {
         text << "\n" << utf8(commit->body);
     }
-    details_->ChangeValue(text);
+    SetDetailsText(text);
 
     // The file list is small enough to fetch inline; the patch for a selected
     // file is fetched on demand.
@@ -284,12 +305,13 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
     long row = 0;
     for (const auto& file : changed_files_) {
         const auto name = repomancer::vcs::file_change_name(file.change);
-        files_->InsertItem(row, wxString::FromUTF8(std::string(name)));
+        files_->InsertItem(row, wxEmptyString);
+        files_->SetItem(row, 1, wxString::FromUTF8(std::string(name)));
         wxString path = wxString::FromUTF8(file.path);
         if (!file.old_path.empty()) {
             path = wxString::FromUTF8(file.old_path) + " → " + path;
         }
-        files_->SetItem(row, 1, path);
+        files_->SetItem(row, 2, path);
         ++row;
     }
     if (!changed_files_.empty()) {
@@ -358,6 +380,12 @@ void MainFrame::OnRefActivated(wxTreeEvent& event) {
     // Checking a ref out belongs to the write milestone; for now activating one
     // just reports it.
     SetStatusText(wxString::Format(_("Ref: %s"), data->full_name()));
+}
+
+void MainFrame::SetDetailsText(const wxString& text) {
+    details_->SetReadOnly(false);
+    details_->SetText(text);
+    details_->SetReadOnly(true);
 }
 
 void MainFrame::RefreshLogRows() {
@@ -491,7 +519,7 @@ void MainFrame::LoadRepository(const wxString& path) {
             }
             const auto count = result.value().size();
             model_->ReplaceAll(std::move(result).value());
-            details_->ChangeValue(wxEmptyString);
+            SetDetailsText(wxEmptyString);
             files_->DeleteAllItems();
             changed_files_.clear();
             diff_->Clear();
