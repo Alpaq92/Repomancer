@@ -40,7 +40,6 @@ TEST_CASE("graph layout: the first head is left-most whatever its class") {
     REQUIRE(layout.rows.size() == 1);
     CHECK(layout.rows[0].lane == 0);
     CHECK(layout.max_lanes == 1);
-    CHECK(layout.rows[0].color == branch_class_color(BranchClass::Feature));
 }
 
 TEST_CASE("graph layout: a topic branch opens to the right of the mainline") {
@@ -54,7 +53,9 @@ TEST_CASE("graph layout: a topic branch opens to the right of the mainline") {
     CHECK(layout.rows[0].lane == 0); // main
     CHECK(layout.rows[1].lane == 1); // feature sits beside it, not on top
     CHECK(layout.rows[0].color == branch_class_color(BranchClass::Main));
-    CHECK(layout.rows[1].color == branch_class_color(BranchClass::Feature));
+    // Topic branches cycle, so the only guarantee is that it is not the
+    // mainline's colour.
+    CHECK(layout.rows[1].color != layout.rows[0].color);
 }
 
 TEST_CASE("graph layout: model none falls back to structural layout") {
@@ -66,9 +67,9 @@ TEST_CASE("graph layout: model none falls back to structural layout") {
     CHECK(layout.rows[0].lane == 0);
     // Cycling palette starts at 0, which happens to be Main's colour too, so
     // assert the branch model was not consulted by checking a feature head.
-    const std::vector<Commit> feature = {head("b", "feature/x")};
-    const auto plain = compute_graph_layout(feature, options);
-    CHECK(plain.rows[0].color != branch_class_color(BranchClass::Feature));
+    const std::vector<Commit> named = {head("b", "develop")};
+    const auto plain = compute_graph_layout(named, options);
+    CHECK(plain.rows[0].color != branch_class_color(BranchClass::Develop));
 }
 
 TEST_CASE("graph layout: unclassified heads still reuse freed lanes") {

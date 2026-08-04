@@ -48,7 +48,10 @@ bool is_dark(const wxColour& background) {
 
 } // namespace
 
-DiffView::DiffView(wxWindow* parent, wxWindowID id) : wxStyledTextCtrl(parent, id) {
+DiffView::DiffView(wxWindow* parent, wxWindowID id)
+    // No frame of its own: the pane already has a header above it, and the
+    // control's border reads as a stray line under that header.
+    : wxStyledTextCtrl(parent, id, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE) {
     SetReadOnly(true);
     SetWrapMode(wxSTC_WRAP_NONE);
     SetViewEOL(false);

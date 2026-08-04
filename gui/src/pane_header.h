@@ -3,60 +3,65 @@
 //
 // The strip that titles a docked pane.
 //
-// It paints itself with wxRendererNative::DrawHeaderButton — the very call the
-// list control uses for its own column headers — so a pane title and a column
-// title are the same drawing, not two things adjusted until they look alike. A
-// wxHeaderCtrl was the obvious choice but takes a different path on GTK and
-// comes out flat, so the two never matched.
+// It is a real table — a wxDataViewListCtrl with one column and no rows,
+// clamped to the height of its own header — so the title is drawn by exactly
+// the widget that draws the log's column headers. Earlier attempts painted a
+// lookalike, first with wxHeaderCtrl and then with the native renderer, and
+// each differed somewhere: weight, indent, height or border. Using the same
+// control removes the question.
 
 #pragma once
 
-#include <wx/control.h>
-#include <wx/dcbuffer.h>
-#include <wx/renderer.h>
-#include <wx/settings.h>
-
-#include <utility>
+#include <wx/dataview.h>
 
 namespace repomancer::gui {
 
-class PaneHeader : public wxControl {
+class PaneHeader : public wxDataViewListCtrl {
 public:
-    PaneHeader(wxWindow* parent, wxString title)
-        : wxControl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE),
-          title_(std::move(title)) {
-        SetBackgroundStyle(wxBG_STYLE_PAINT);
-        Bind(wxEVT_PAINT, &PaneHeader::OnPaint, this);
+    PaneHeader(wxWindow* parent, const wxString& title)
+        : wxDataViewListCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                             wxBORDER_NONE) {
+        column_ = AppendTextColumn(title, wxDATAVIEW_CELL_INERT, wxCOL_WIDTH_AUTOSIZE,
+                                   wxALIGN_LEFT, 0);
+        // The column spans the pane, so the title reads as the pane's own
+        // header rather than as one column among several.
+        Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+            event.Skip();
+            if (column_ != nullptr) {
+                column_->SetWidth(GetClientSize().GetWidth());
+            }
+        });
     }
 
     void SetTitle(const wxString& title) {
-        title_ = title;
-        Refresh();
+        if (column_ != nullptr) {
+            column_->SetTitle(title);
+        }
+    }
+
+    // Height of the header this has to line up with. Without it the empty
+    // table would show its blank body under the title as well.
+    void SetHeight(int height) {
+        if (height <= 0 || height == height_) {
+            return;
+        }
+        height_ = height;
+        SetMinSize(wxSize(-1, height));
+        SetMaxSize(wxSize(-1, height));
+        InvalidateBestSize();
+        if (wxWindow* parent = GetParent()) {
+            parent->Layout();
+        }
     }
 
 protected:
     wxSize DoGetBestClientSize() const override {
-        return wxSize(-1, wxRendererNative::Get().GetHeaderButtonHeight(
-                              const_cast<PaneHeader*>(this)));
+        return wxSize(-1, height_ > 0 ? height_ : GetCharHeight() + 9);
     }
 
 private:
-    void OnPaint(wxPaintEvent&) {
-        wxAutoBufferedPaintDC dc(this);
-        dc.SetBackground(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
-        dc.Clear();
-
-        wxHeaderButtonParams params;
-        params.m_labelText = title_;
-        params.m_labelAlignment = wxALIGN_LEFT | wxALIGN_CENTRE_VERTICAL;
-        params.m_labelColour = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
-
-        wxRect rect(GetClientSize());
-        wxRendererNative::Get().DrawHeaderButton(this, dc, rect, 0, wxHDR_SORT_ICON_NONE,
-                                                 &params);
-    }
-
-    wxString title_;
+    wxDataViewColumn* column_ = nullptr;
+    int height_ = 0;
 };
 
 } // namespace repomancer::gui

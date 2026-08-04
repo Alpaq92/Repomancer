@@ -60,17 +60,20 @@ int branch_class_color(BranchClass cls) {
     // Indices into the renderer's palette (see gui/src/graph_renderer.cpp).
     switch (cls) {
     case BranchClass::Main:
-        return 0; // blue
+        return 2; // blue
     case BranchClass::Develop:
-        return 6; // yellow
+        return 11; // yellow
     case BranchClass::Release:
-        return 4; // purple
+        return 7; // grape
     case BranchClass::Hotfix:
-        return 3; // red
+        return 6; // red
+    // Topic branches cycle instead of taking a fixed colour: a repository
+    // usually has one mainline, one develop, one release and one hotfix in
+    // flight, but several features at once — giving them all the same colour
+    // makes the graph a wall of one hue and hides which lane is which.
     case BranchClass::Bugfix:
-        return 5; // teal
     case BranchClass::Feature:
-        return 2; // green
+        break;
     case BranchClass::Unknown:
         break;
     }

@@ -66,8 +66,17 @@ TEST_CASE("branch model: ordering puts persistent branches left") {
           branch_class_order(BranchClass::Unknown));
 }
 
-TEST_CASE("branch model: classes carry distinct colours, unknown cycles") {
+TEST_CASE("branch model: long-lived classes are fixed, topics cycle") {
+    // One of each is normally in flight, so a fixed colour identifies them.
     CHECK(branch_class_color(BranchClass::Main) >= 0);
-    CHECK(branch_class_color(BranchClass::Main) != branch_class_color(BranchClass::Feature));
+    CHECK(branch_class_color(BranchClass::Develop) >= 0);
+    CHECK(branch_class_color(BranchClass::Release) >= 0);
+    CHECK(branch_class_color(BranchClass::Hotfix) >= 0);
+    CHECK(branch_class_color(BranchClass::Main) != branch_class_color(BranchClass::Develop));
+
+    // Several features run at once, so they take successive palette entries
+    // rather than all sharing one.
+    CHECK(branch_class_color(BranchClass::Feature) == -1);
+    CHECK(branch_class_color(BranchClass::Bugfix) == -1);
     CHECK(branch_class_color(BranchClass::Unknown) == -1);
 }

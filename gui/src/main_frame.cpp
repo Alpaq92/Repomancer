@@ -65,8 +65,8 @@ MainFrame::MainFrame()
     theme_menu->AppendRadioItem(ID_ThemeLight, _("&Light"));
     theme_menu->AppendRadioItem(ID_ThemeDark, _("&Dark"));
     auto* style_menu = new wxMenu;
-    style_menu->AppendRadioItem(ID_StyleRounded, _("&Rounded"));
     style_menu->AppendRadioItem(ID_StyleAngular, _("&Angular"));
+    style_menu->AppendRadioItem(ID_StyleRounded, _("&Rounded"));
 
     auto* view_menu = new wxMenu;
     view_menu->AppendSubMenu(theme_menu, _("&Theme"));
@@ -138,8 +138,9 @@ MainFrame::MainFrame()
     // Each pane is titled by a real header control sitting above its content,
     // the same kind the log uses for its columns, so both read as one sort of
     // header. wxAUI's own caption is switched off for these panes.
-    const auto titled = [](wxPanel* panel, const wxString& title, wxWindow* content) {
+    const auto titled = [this](wxPanel* panel, const wxString& title, wxWindow* content) {
         auto* header = new repomancer::gui::PaneHeader(panel, title);
+        pane_headers_.push_back(header);
         auto* sizer = new wxBoxSizer(wxVERTICAL);
         sizer->Add(header, 0, wxEXPAND);
         sizer->Add(content, 1, wxEXPAND);
@@ -668,6 +669,16 @@ void MainFrame::LoadRepository(const wxString& path) {
                                            wxString::FromUTF8(path_utf8)));
 
             PopulateRefs();
+
+            // The log's column header is the reference the pane headers line
+            // up with. Its height is not exposed, but the first row's position
+            // in client coordinates is exactly where that header ends.
+            if (model_->GetCount() > 0) {
+                const wxRect row = log_view_->GetItemRect(model_->GetItem(0));
+                for (auto* header : pane_headers_) {
+                    header->SetHeight(row.GetTop());
+                }
+            }
 
             // Land on the newest commit so the detail panes have content.
             if (count > 0) {

@@ -19,8 +19,8 @@ namespace repomancer::gui {
 
 // How a line moves between lanes.
 enum class GraphStyle {
+    Angular, // orthogonal legs and square corners — the Git Extensions look
     Rounded, // the diagonal eased into the lane at both ends
-    Angular, // straight diagonals — the Git Extensions / git-graph look
 };
 
 [[nodiscard]] GraphStyle graph_style_from_string(std::string_view value);
@@ -53,7 +53,7 @@ private:
     const std::vector<repomancer::vcs::GraphRow>* rows_;
     long row_index_ = -1;
     int max_lanes_ = 1;
-    GraphStyle style_ = GraphStyle::Rounded;
+    GraphStyle style_ = GraphStyle::Angular;
 };
 
 } // namespace repomancer::gui

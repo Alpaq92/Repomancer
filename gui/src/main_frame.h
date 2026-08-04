@@ -5,6 +5,7 @@
 
 #include "diff_view.h"
 #include "graph_renderer.h"
+#include "pane_header.h"
 #include "log_model.h"
 
 #include <wx/aui/aui.h>
@@ -59,6 +60,7 @@ private:
     repomancer::gui::DiffView* diff_ = nullptr;
     wxObjectDataPtr<CommitLogModel> model_;
     repomancer::gui::GraphRenderer* graph_renderer_ = nullptr;
+    std::vector<repomancer::gui::PaneHeader*> pane_headers_;
     wxDataViewColumn* graph_column_ = nullptr;
     wxDataViewColumn* subject_column_ = nullptr;
     wxDataViewColumn* author_column_ = nullptr;

@@ -57,7 +57,7 @@ struct Line {
 } // namespace
 
 GraphStyle graph_style_from_string(std::string_view value) {
-    return value == "angular" ? GraphStyle::Angular : GraphStyle::Rounded;
+    return value == "rounded" ? GraphStyle::Rounded : GraphStyle::Angular;
 }
 
 const char* graph_style_to_string(GraphStyle style) {
@@ -67,18 +67,22 @@ const char* graph_style_to_string(GraphStyle style) {
 wxColour lane_colour(int index) {
     // Open Color (https://yeun.github.io/open-color/, MIT) shade 6 — the step
     // designed to stay legible against both light and dark backgrounds. The
-    // order is fixed: branch classes index into it (see branch_class_color).
+    // order is deliberate: adjacent lanes take adjacent entries, so it runs
+    // through the hue circle rather than along it, and neighbouring lanes stay
+    // told apart. Branch classes index into it by name (branch_class_color).
     static const wxColour palette[] = {
-        wxColour(0x22, 0x8B, 0xE6), // blue-6   — main
-        wxColour(0xFD, 0x7E, 0x14), // orange-6
-        wxColour(0x40, 0xC0, 0x57), // green-6  — feature
-        wxColour(0xFA, 0x52, 0x52), // red-6    — hotfix
-        wxColour(0xBE, 0x4B, 0xDB), // grape-6  — release
-        wxColour(0x12, 0xB8, 0x86), // teal-6   — bugfix
-        wxColour(0xFA, 0xB0, 0x05), // yellow-6 — develop
         wxColour(0xE6, 0x49, 0x80), // pink-6
-        wxColour(0x15, 0xAA, 0xBF), // cyan-6
         wxColour(0x79, 0x50, 0xF2), // violet-6
+        wxColour(0x22, 0x8B, 0xE6), // blue-6
+        wxColour(0x12, 0xB8, 0x86), // teal-6
+        wxColour(0x82, 0xC9, 0x1E), // lime-6
+        wxColour(0xFD, 0x7E, 0x14), // orange-6
+        wxColour(0xFA, 0x52, 0x52), // red-6
+        wxColour(0xBE, 0x4B, 0xDB), // grape-6
+        wxColour(0x4C, 0x6E, 0xF5), // indigo-6
+        wxColour(0x15, 0xAA, 0xBF), // cyan-6
+        wxColour(0x40, 0xC0, 0x57), // green-6
+        wxColour(0xFA, 0xB0, 0x05), // yellow-6
     };
     constexpr int count = static_cast<int>(sizeof(palette) / sizeof(palette[0]));
     if (index < 0) {
