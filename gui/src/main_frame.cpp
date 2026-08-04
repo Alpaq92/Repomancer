@@ -12,6 +12,8 @@
 #include <wx/dirdlg.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
+#include <wx/panel.h>
+#include <wx/sizer.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -112,18 +114,56 @@ MainFrame::MainFrame()
                                                wxDATAVIEW_CELL_INERT, 100, wxALIGN_LEFT,
                                                wxDATAVIEW_COL_RESIZABLE);
 
-    details_ = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
-                              wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+    // Wrapped, not clipped: a long subject or a wide body should reflow
+    // rather than force horizontal scrolling, and the text needs room to
+    // breathe away from the pane border.
+    // No wrapping: the pane is mostly hashes and identity lines, and breaking
+    // a 40-character hash across two rows reads as damage rather than reflow.
+    // The inset comes from a sizer border — wxTextCtrl::SetMargins is not
+    // honoured for multiline text on every port — with SetMargins on top for
+    // the ports that do take it.
+    auto* details_panel = new wxPanel(this);
+    details_ = new wxTextCtrl(details_panel, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                              wxDefaultSize,
+                              wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP | wxBORDER_NONE);
     details_->SetFont(wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
+    details_->SetMargins(wxPoint(6, 6));
+    auto* details_sizer = new wxBoxSizer(wxVERTICAL);
+    details_sizer->Add(details_, 1, wxEXPAND | wxALL, 8);
+    details_panel->SetSizer(details_sizer);
+    details_panel->SetBackgroundColour(details_->GetBackgroundColour());
 
+    files_ = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                            wxLC_REPORT | wxLC_SINGLE_SEL);
+    files_->AppendColumn(_("Change"), wxLIST_FORMAT_LEFT, 90);
+    files_->AppendColumn(_("File"), wxLIST_FORMAT_LEFT, 320);
+
+    diff_ = new repomancer::gui::DiffView(this);
+
+    // GitX-style master/detail: history on top, and below it the commit's
+    // metadata, the files it touched, and the patch for whichever is selected.
     aui_.SetManagedWindow(this);
     aui_.AddPane(log_view_, wxAuiPaneInfo().CenterPane().Name("log"));
-    aui_.AddPane(details_, wxAuiPaneInfo()
+    aui_.AddPane(details_panel, wxAuiPaneInfo()
                                .Bottom()
                                .Name("details")
                                .Caption(_("Commit details"))
-                               .BestSize(-1, 220)
+                               .BestSize(360, 260)
                                .CloseButton(false));
+    aui_.AddPane(files_, wxAuiPaneInfo()
+                             .Bottom()
+                             .Name("files")
+                             .Caption(_("Changed files"))
+                             .BestSize(360, 260)
+                             .CloseButton(false)
+                             .Position(1));
+    aui_.AddPane(diff_, wxAuiPaneInfo()
+                            .Bottom()
+                            .Name("diff")
+                            .Caption(_("Diff"))
+                            .BestSize(520, 260)
+                            .CloseButton(false)
+                            .Position(2));
     aui_.Update();
 
     Bind(wxEVT_MENU, &MainFrame::OnOpenRepository, this, wxID_OPEN);
@@ -132,6 +172,7 @@ MainFrame::MainFrame()
     Bind(wxEVT_MENU, &MainFrame::OnQuit, this, wxID_EXIT);
     Bind(wxEVT_MENU, &MainFrame::OnAbout, this, wxID_ABOUT);
     log_view_->Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, &MainFrame::OnCommitSelected, this);
+    files_->Bind(wxEVT_LIST_ITEM_SELECTED, &MainFrame::OnFileSelected, this);
     log_view_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
         event.Skip();
         FitColumns();
@@ -163,8 +204,13 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
     const auto* commit = item.IsOk() ? model_->commit_at(model_->GetRow(item)) : nullptr;
     if (commit == nullptr) {
         details_->ChangeValue(wxEmptyString);
+        files_->DeleteAllItems();
+        changed_files_.clear();
+        selected_commit_.clear();
+        diff_->Clear();
         return;
     }
+    selected_commit_ = commit->hash;
 
     const auto utf8 = [](const std::string& text) { return wxString::FromUTF8(text); };
     wxString text;
@@ -185,6 +231,55 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
         text << "\n" << utf8(commit->body);
     }
     details_->ChangeValue(text);
+
+    // The file list is small enough to fetch inline; the patch for a selected
+    // file is fetched on demand.
+    files_->DeleteAllItems();
+    changed_files_.clear();
+    diff_->ShowMessage(_("Select a file to see its changes."));
+
+    auto files = GitDriver().changed_files(repo_path_, selected_commit_);
+    if (!files.ok()) {
+        diff_->ShowMessage(wxString::Format(_("Could not list changed files: %s"),
+                                            wxString::FromUTF8(files.error().message)));
+        return;
+    }
+    changed_files_ = std::move(files).value();
+    long row = 0;
+    for (const auto& file : changed_files_) {
+        const auto name = repomancer::vcs::file_change_name(file.change);
+        files_->InsertItem(row, wxString::FromUTF8(std::string(name)));
+        wxString path = wxString::FromUTF8(file.path);
+        if (!file.old_path.empty()) {
+            path = wxString::FromUTF8(file.old_path) + " → " + path;
+        }
+        files_->SetItem(row, 1, path);
+        ++row;
+    }
+    if (!changed_files_.empty()) {
+        files_->SetItemState(0, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
+    }
+}
+
+void MainFrame::OnFileSelected(wxListEvent& event) { ShowFileDiff(event.GetIndex()); }
+
+void MainFrame::ShowFileDiff(long index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= changed_files_.size() ||
+        selected_commit_.empty()) {
+        return;
+    }
+    const auto& file = changed_files_[static_cast<std::size_t>(index)];
+    const auto diff = GitDriver().file_diff(repo_path_, selected_commit_, file.path);
+    if (!diff.ok()) {
+        diff_->ShowMessage(wxString::Format(_("Could not read the diff: %s"),
+                                            wxString::FromUTF8(diff.error().message)));
+        return;
+    }
+    if (diff.value().empty()) {
+        diff_->ShowMessage(_("No textual changes."));
+        return;
+    }
+    diff_->ShowDiff(diff.value());
 }
 
 void MainFrame::OnGraphStyleSelected(wxCommandEvent& event) {
@@ -207,6 +302,9 @@ void MainFrame::OnThemeSelected(wxCommandEvent& event) {
     }
 
     const bool applied_live = repomancer::gui::apply_theme(mode);
+    if (applied_live && diff_ != nullptr) {
+        diff_->ApplyTheme();
+    }
 
     auto settings = repomancer::load_settings();
     settings.theme = repomancer::gui::theme_mode_to_string(mode);
@@ -258,6 +356,7 @@ void MainFrame::LoadRepository(const wxString& path) {
     }
 
     const std::string path_utf8(path.utf8_str());
+    repo_path_ = std::filesystem::path(path_utf8);
     worker_ = std::thread([this, path_utf8] {
         GitDriver driver;
         LogOptions options;
@@ -275,6 +374,9 @@ void MainFrame::LoadRepository(const wxString& path) {
             const auto count = result.value().size();
             model_->ReplaceAll(std::move(result).value());
             details_->ChangeValue(wxEmptyString);
+            files_->DeleteAllItems();
+            changed_files_.clear();
+            diff_->Clear();
 
             // Size the graph column to the widest row of this history, then
             // fit every other column to what it actually holds.
@@ -283,6 +385,16 @@ void MainFrame::LoadRepository(const wxString& path) {
 
             SetStatusText(wxString::Format(_("%zu commits — %s"), count,
                                            wxString::FromUTF8(path_utf8)));
+
+            // Land on the newest commit so the detail panes have content.
+            if (count > 0) {
+                const wxDataViewItem first = model_->GetItem(0);
+                log_view_->Select(first);
+                log_view_->EnsureVisible(first);
+                wxDataViewEvent selected(wxEVT_DATAVIEW_SELECTION_CHANGED, log_view_,
+                                         graph_column_, first);
+                OnCommitSelected(selected);
+            }
         });
     });
 }

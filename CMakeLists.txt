@@ -39,7 +39,7 @@ if(REPOMANCER_BUILD_GUI)
     # 'gui' feature is off.
     find_program(wxWidgets_CONFIG_EXECUTABLE NAMES wx-config)
   endif()
-  find_package(wxWidgets COMPONENTS aui core base)
+  find_package(wxWidgets COMPONENTS stc aui core base)
   if(wxWidgets_FOUND)
     add_subdirectory(gui)
   else()
