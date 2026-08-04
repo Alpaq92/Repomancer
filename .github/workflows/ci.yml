@@ -70,7 +70,7 @@ jobs:
           echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg-tool" >> "$GITHUB_ENV"
       - name: Bootstrap vcpkg (POSIX)
         if: runner.os != 'Windows'
-        run: "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+        run: bash "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
         shell: bash
       - name: Bootstrap vcpkg (Windows)
         if: runner.os == 'Windows'
@@ -118,7 +118,7 @@ jobs:
           git -C "${{ github.workspace }}/vcpkg-tool" checkout "$VCPKG_COMMIT"
           echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg-tool" >> "$GITHUB_ENV"
       - name: Bootstrap vcpkg
-        run: "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+        run: bash "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
       - name: Configure
         run: cmake --preset linux-asan
       - name: Build
