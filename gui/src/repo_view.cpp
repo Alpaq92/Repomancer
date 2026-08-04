@@ -113,14 +113,19 @@ static gboolean repo_view_button_press(GtkWidget* widget, GdkEventButton* event,
                                        gpointer data) {
     // Only presses on the rows themselves; header clicks arrive on another
     // GdkWindow and their coordinates would convert into nonsense.
-    if (event->type == GDK_BUTTON_PRESS && event->button == 1 &&
+    if (event->button == 1 &&
         event->window == gtk_tree_view_get_bin_window(GTK_TREE_VIEW(widget))) {
-        int x = 0;
-        int y = 0;
-        gtk_tree_view_convert_bin_window_to_widget_coords(
-            GTK_TREE_VIEW(widget), static_cast<int>(event->x),
-            static_cast<int>(event->y), &x, &y);
-        static_cast<repomancer::gui::RepoView*>(data)->OnItemPress(wxPoint(x, y));
+        if (event->type == GDK_BUTTON_PRESS) {
+            int x = 0;
+            int y = 0;
+            gtk_tree_view_convert_bin_window_to_widget_coords(
+                GTK_TREE_VIEW(widget), static_cast<int>(event->x),
+                static_cast<int>(event->y), &x, &y);
+            static_cast<repomancer::gui::RepoView*>(data)->OnItemPress(wxPoint(x, y));
+        }
+        // Fully handled: the tree view's own press handling would set a
+        // cursor row and flash its focus decoration over the whole cell.
+        return TRUE;
     }
     return FALSE;
 }
@@ -148,40 +153,49 @@ RepoView::RepoView(wxWindow* parent)
     });
 
     // The table has exactly one row, so selecting it means nothing — the
-    // click's position is what carries the intent. A click on a line that
-    // names a ref activates that ref, and the selection is dropped again so
-    // the block does not light up as one big selected cell.
-    Bind(wxEVT_LEFT_DOWN, [](wxMouseEvent& event) {
-        event.Skip();
-        fprintf(stderr, "[down] wx mouse event at (%d,%d)\n", event.GetX(), event.GetY());
-    });
+    // click's position is what carries the intent: the line under it is the
+    // item being clicked.
+#ifdef __WXGTK__
+    // Row selection is disabled outright — letting the press select would
+    // flash the whole cell before the selection could be dropped again — and
+    // the click is taken straight from the tree view's button press, which
+    // wx does not forward as a mouse event for this control.
+    if (GtkWidget* tree = GtkGetTreeView()) {
+        gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(tree)),
+                                    GTK_SELECTION_NONE);
+        // Pointer-driven only: without focus there is no focus row to draw,
+        // and a click here does not pull the focus away from the log.
+        gtk_widget_set_can_focus(tree, FALSE);
+        g_signal_connect(tree, "button-press-event",
+                         G_CALLBACK(repo_view_button_press), this);
+    }
+#else
     Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, [this](wxDataViewEvent& event) {
         event.Skip();
         if (event.GetItem().IsOk()) {
-            const int line = LineAt(ScreenToClient(wxGetMousePosition()));
-            if (line >= 0 && line < static_cast<int>(targets_.size()) &&
-                !targets_[line].empty()) {
-                // The click landed on an item: mark it like a list selection
-                // and act on it.
-                selected_line_ = line;
-                if (on_activate_) {
-                    on_activate_(targets_[line]);
-                }
-            }
+            OnItemPress(ScreenToClient(wxGetMousePosition()));
         }
-        CallAfter([this] {
-            UnselectAll();
-            Refresh();
-        });
+        CallAfter([this] { UnselectAll(); });
     });
+#endif
 }
 
 void RepoView::OnItemPress(const wxPoint& point) {
     const int line = LineAt(point);
-    if (line >= 0 && line < static_cast<int>(targets_.size()) &&
-        !targets_[line].empty()) {
+    const bool acts = line >= 0 && line < static_cast<int>(targets_.size()) &&
+                      !targets_[line].empty();
+    if (acts) {
         selected_line_ = line;
+        // With no selection to change, nothing else prompts a redraw — and
+        // wx's Refresh does not reach the composite's drawing area on GTK,
+        // so the tree view is asked to repaint directly.
+#ifdef __WXGTK__
+        if (GtkWidget* tree = GtkGetTreeView()) {
+            gtk_widget_queue_draw(tree);
+        }
+#else
         Refresh();
+#endif
         if (on_activate_) {
             on_activate_(targets_[line]);
         }
