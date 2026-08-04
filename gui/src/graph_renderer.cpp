@@ -6,7 +6,6 @@
 #include <wx/brush.h>
 #include <wx/dc.h>
 #include <wx/pen.h>
-#include <wx/settings.h>
 
 #include <algorithm>
 #include <iterator>
@@ -80,6 +79,12 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
     const int half = std::max(cell.GetHeight(), kRowHeight) / 2 + 1;
     const int top = middle - half;
     const int bottom = middle + half;
+    // Straight runs may overhang into the neighbouring rows — whatever padding
+    // the port leaves around the cell rect gets covered either way. Curves
+    // must not: they have to reach their lane exactly at the boundary, or the
+    // next row picks the line up at the wrong x.
+    const int top_run = middle - half - kRowHeight / 2;
+    const int bottom_run = middle + half + kRowHeight / 2;
     const int dot_x = cell.GetLeft() + lane_x(row->lane);
 
     // Straight runs go through the plain DC: pixel-aligned, no antialiasing,
@@ -88,28 +93,34 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
         dc->SetPen(wxPen(colour, kLineWidth));
         dc->DrawLine(x, y1, x, y2);
     };
-    // Only the curves need the graphics context.
     std::vector<std::tuple<int, int, int, int, wxColour>> curves;
-    const auto draw_edge = [&](int x1, int y1, int x2, int y2, const wxColour& colour) {
-        if (x1 == x2) {
-            draw_vertical(x1, y1, y2, colour);
-        } else {
-            curves.emplace_back(x1, y1, x2, y2, colour);
-        }
-    };
 
     // Lines first, dot last, so the dot always sits on top.
     for (const auto& segment : row->pass) {
-        draw_edge(cell.GetLeft() + lane_x(segment.from), top,
-                  cell.GetLeft() + lane_x(segment.to), bottom, lane_colour(segment.color));
+        const int from_x = cell.GetLeft() + lane_x(segment.from);
+        const int to_x = cell.GetLeft() + lane_x(segment.to);
+        if (from_x == to_x) {
+            draw_vertical(from_x, top_run, bottom_run, lane_colour(segment.color));
+        } else {
+            curves.emplace_back(from_x, top, to_x, bottom, lane_colour(segment.color));
+        }
     }
     for (const auto& edge : row->children_in) {
-        draw_edge(cell.GetLeft() + lane_x(edge.lane), top, dot_x, middle,
-                  lane_colour(edge.color));
+        const int x = cell.GetLeft() + lane_x(edge.lane);
+        if (x == dot_x) {
+            // Stops at the dot: a lane that ends here must not sprout a stub.
+            draw_vertical(x, top_run, middle, lane_colour(edge.color));
+        } else {
+            curves.emplace_back(x, top, dot_x, middle, lane_colour(edge.color));
+        }
     }
     for (const auto& edge : row->parents_out) {
-        draw_edge(dot_x, middle, cell.GetLeft() + lane_x(edge.lane), bottom,
-                  lane_colour(edge.color));
+        const int x = cell.GetLeft() + lane_x(edge.lane);
+        if (x == dot_x) {
+            draw_vertical(x, middle, bottom_run, lane_colour(edge.color));
+        } else {
+            curves.emplace_back(dot_x, middle, x, bottom, lane_colour(edge.color));
+        }
     }
 
     // DrawSpline works on every wxDC — unlike wxGraphicsContext, which the
@@ -129,13 +140,10 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
         dc->DrawSpline(static_cast<int>(std::size(points)), points);
     }
 
-    // A halo in the control's own background keeps the dot legible where a
-    // lane passes directly behind it.
+    // No halo around the dot: it would be painted over the lane that runs into
+    // and out of the dot, notching a gap into an otherwise continuous line.
+    // The dot is drawn last, so it already covers the line ends it should.
     const int radius = row->is_merge ? kMergeDotRadius : kDotRadius;
-    dc->SetBrush(*wxTRANSPARENT_BRUSH);
-    dc->SetPen(wxPen(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX), 2));
-    dc->DrawCircle(dot_x, middle, radius + 1);
-
     dc->SetBrush(wxBrush(lane_colour(row->color)));
     dc->SetPen(wxPen(lane_colour(row->color), 1));
     dc->DrawCircle(dot_x, middle, radius);
