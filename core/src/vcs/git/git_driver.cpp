@@ -115,6 +115,42 @@ VcsResult<StatusSnapshot> GitDriver::status(const std::filesystem::path& repo) c
     return parse_status_porcelain_v2z(run.out, config_.limits);
 }
 
+VcsResult<std::vector<ChangedFile>>
+GitDriver::changed_files(const std::filesystem::path& repo, const std::string& commit) const {
+    const auto run = proc::ProcessRunner::run(
+        make_spec(&repo, {"diff-tree", "-r", "-z", "--no-commit-id", "--name-status",
+                          "--find-renames", "-m", "--first-parent", "--root",
+                          "--end-of-options", commit}));
+    if (!run.ok()) {
+        return from_run_failure(run);
+    }
+    return parse_name_status_z(run.out, config_.limits);
+}
+
+VcsResult<std::vector<FileDiff>> GitDriver::file_diff(const std::filesystem::path& repo,
+                                                      const std::string& commit,
+                                                      const std::string& path,
+                                                      int context_lines) const {
+    std::vector<std::string> args = {"show",
+                                     "--format=", // header suppressed; we want only the patch
+                                     "--patch",
+                                     "--find-renames",
+                                     "--no-color",
+                                     "--unified=" + std::to_string(context_lines),
+                                     "--first-parent",
+                                     "--end-of-options",
+                                     commit,
+                                     "--"};
+    if (!path.empty()) {
+        args.push_back(path);
+    }
+    const auto run = proc::ProcessRunner::run(make_spec(&repo, std::move(args)));
+    if (!run.ok()) {
+        return from_run_failure(run);
+    }
+    return parse_unified_diff(run.out, config_.limits);
+}
+
 VcsResult<std::vector<Commit>> GitDriver::log(const std::filesystem::path& repo,
                                               const LogOptions& options) const {
     const auto run = proc::ProcessRunner::run(make_spec(&repo, build_log_args(options)));

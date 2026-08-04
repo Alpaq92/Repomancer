@@ -5,6 +5,7 @@ add_library(repomancer-core STATIC
   src/settings.cpp
   src/vcs/graph.cpp
   src/vcs/branch_model.cpp
+  src/vcs/diff.cpp
   src/vcs/git/porcelain.cpp
   src/vcs/git/log_format.cpp
   src/vcs/git/git_driver.cpp

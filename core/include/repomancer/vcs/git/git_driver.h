@@ -9,6 +9,7 @@
 #pragma once
 
 #include <repomancer/process/process_runner.h>
+#include <repomancer/vcs/diff.h>
 #include <repomancer/vcs/provider.h>
 
 #include <chrono>
@@ -44,6 +45,17 @@ public:
 
     [[nodiscard]] VcsResult<std::vector<Commit>>
     log(const std::filesystem::path& repo, const LogOptions& options) const override;
+
+    // Files a commit touched. Merges are diffed against their first parent —
+    // git shows nothing for them otherwise — and the root commit against the
+    // empty tree, so every commit in the log yields something to inspect.
+    [[nodiscard]] VcsResult<std::vector<ChangedFile>>
+    changed_files(const std::filesystem::path& repo, const std::string& commit) const;
+
+    // Patch for one path of one commit. An empty path diffs the whole commit.
+    [[nodiscard]] VcsResult<std::vector<FileDiff>>
+    file_diff(const std::filesystem::path& repo, const std::string& commit,
+              const std::string& path, int context_lines = 3) const;
 
 private:
     [[nodiscard]] proc::RunSpec make_spec(const std::filesystem::path* repo,
