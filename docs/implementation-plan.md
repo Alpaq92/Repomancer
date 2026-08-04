@@ -174,6 +174,7 @@ process) / Shell (compute in-extension, blocking) / None*, plus drive-type check
 | Feature | Options | Recommendation |
 |---|---|---|
 | Shell/layout | wxSplitter trees · **wxAUI docking** | ✅ wxAUI (TortoiseGit-style dockable panes, saved perspectives) |
+| Window layout | **GitX-inspired master–detail (user direction 2026-08-04)** | ✅ Two modes switched from the toolbar, as GitX does. **History:** left dock = repository tree (Branches / Remotes / Tags / Stashes / Submodules); centre = commit log with the graph column; bottom dock = commit detail (message, author, hashes, parents) beside the changed-file list, with the diff opening for the selected file. **Stage:** unstaged and staged file lists side by side, diff with per-hunk/per-line staging below, commit message box with the commit button. GitX itself is GPL-2.0-only, so this is layout inspiration only — no code. |
 | Commit log + inline graph | wxDataViewCtrl virtual model · **custom-drawn graph column in `wxDataViewVirtualListModel`** · full custom canvas | ✅ virtual list + custom-render graph column (lane layout computed in core); infinite scroll via batched `git log` |
 | Revision-graph view (DAG overview, TortoiseGit parity) | custom `wxScrolled` + wxGraphicsContext (Direct2D/CoreGraphics/Cairo) · wxGLCanvas | ✅ wxGraphicsContext canvas first; wxGLCanvas only if >50k-node profiling demands |
 | Diff viewer | **2× wxStyledTextCtrl (Scintilla — permissive!)** side-by-side, synced scroll, custom inter-pane gutter · unified single-STC mode | ✅ both modes; intra-line highlights via Myers/diff-match-patch in core; image diff via wxImage panes |
@@ -220,7 +221,41 @@ Two distinct features:
 2. **Revision Graph overview** (whole-DAG map, M8): hand-rolled layered layout (rank =
    topo generation, heuristic crossing reduction) on a pan/zoom `wxGraphicsContext` canvas.
    ⚠ OGDF is GPL — avoid; graphviz is EPL-1.0 (weak copyleft) — acceptable only as an
-   *optional shell-out to `dot`*, never linked.
+   *optional shell-out to `dot`*, never linked. Permissive layered-layout libraries that could
+   serve here: `drag` (BSD-3, header-only, dormant), `dyng` (Apache-2.0), Boost Graph /
+   LEMON (Boost, algorithms only).
+
+**Surveyed alternatives (2026-08-04) — no library replaces the lane engine.** General graph
+layout libraries solve Sugiyama-style layout where *both* axes are free; a commit log fixes y
+(one commit per list row, topological order, aligned to the control's rows) and solves only for
+the lane. They are also batch algorithms, while we stream 1–2k commits at a time and must never
+relayout earlier rows. Rendering engines (Skia BSD-3, Blend2D zlib, NanoVG zlib, ThorVG MIT)
+are all permissive but megabytes of dependency for a few lines and a circle in a ~40×26 px cell.
+
+**Portable references (permissive — may be ported with NOTICE attribution):**
+- **serie** (MIT, Rust TUI) — renders each graph row as an *image*, confirming the
+  offscreen-bitmap approach below. Offers a **Rounded / Angular** edge-style option worth
+  copying. Its proportions are close to ours (cell 50 px: line 5, dot radius 10, ring 13 ⇒
+  line ≈10 % of cell, dot ≈20 %). Crucially, its lane lines **stop at the circle's outer
+  radius** instead of running under the dot — that is the correct way to give a dot a
+  contrasting ring, and the reason our halo attempt notched the lanes.
+- **git-graph** (MIT, Rust CLI) — **branching-model-aware lane assignment**: branches are
+  classified by name (`^(master|main|trunk)$`, `^(develop|dev)$`, `^feature.*$`, …) and given a
+  *persistence* rank and a *column order*, plus a `ShortestFirst`/`LongestFirst` policy. This is
+  why its git-flow graphs read so much better than purely structural lane assignment. Candidate
+  enhancement once refs are tracked per commit (post-1.0).
+- **IntelliJ Community `vcs-log`** (Apache-2.0 sources) — the most complete permissive
+  implementation: collapsing, filtering, 100k+ commits.
+- **SourceGit** (MIT, C#) and **indigane/git-graph-drawing** (Unlicense, public domain).
+
+**Learn-only (GPL — no code may be copied):** Git Extensions (GPL-3.0), GitX (GPL-2.0-only),
+gitk, qgit, tig, gitg, git-cola.
+
+**Rendering quality gap to close:** `wxGraphicsContext` is not obtainable from the DataView
+cell DC, so curves use `wxDC::DrawSpline` — antialiased via Cairo on GTK, but **aliased on MSW
+under GDI**. Fix without a dependency: paint each row into an offscreen `wxBitmap` through
+`wxGraphicsContext::Create(wxMemoryDC&)` (that factory *is* supported everywhere) and blit it;
+cache per row shape. Do this before Windows QA.
 
 ### 4.3 Localization (i18n/l10n)
 
