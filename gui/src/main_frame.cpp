@@ -208,10 +208,11 @@ MainFrame::MainFrame()
         [this](const repomancer::gui::RepoView::Target& target) { JumpToRef(target); });
     {
         // Horizontal: a spacer, sized once the dock layout is known, then the
-        // table filling the rest.
+        // table filling the rest. One pixel on the other sides keeps room for
+        // the outline the pane draws around the table.
         auto* sizer = new wxBoxSizer(wxHORIZONTAL);
         repo_margin_ = sizer->AddSpacer(0);
-        sizer->Add(repo_view_, 1, wxEXPAND);
+        sizer->Add(repo_view_, 1, wxEXPAND | wxTOP | wxBOTTOM | wxRIGHT, 1);
         repo_panel_->SetSizer(sizer);
     }
 
@@ -237,6 +238,7 @@ MainFrame::MainFrame()
             pane->Refresh();
         });
     };
+    outlined(repo_panel_, repo_view_);
     outlined(details_panel_, details_table);
 
     // GitX-style master/detail: history on top, and below it the commit's
@@ -281,8 +283,11 @@ MainFrame::MainFrame()
     // gap is more than the sash metric alone, so it is measured off the
     // laid-out windows rather than derived from art settings.
     CallAfter([this] {
-        const int gap = log_view_->GetScreenPosition().x -
-                        (repo_panel_->GetScreenPosition().x +
+        // Both windows are the frame's own children, so their positions are
+        // directly comparable — and unlike screen coordinates, they are valid
+        // before the frame is shown.
+        const int gap = log_view_->GetPosition().x -
+                        (repo_panel_->GetPosition().x +
                          repo_panel_->GetSize().GetWidth());
         if (gap > 0 && repo_margin_ != nullptr) {
             repo_margin_->AssignSpacer(gap, 0);
