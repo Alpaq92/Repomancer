@@ -8,7 +8,7 @@
 #include <wx/pen.h>
 
 #include <algorithm>
-#include <iterator>
+#include <cmath>
 #include <tuple>
 #include <vector>
 
@@ -23,6 +23,37 @@ constexpr int kMergeDotRadius = 5;
 constexpr int kLineWidth = 2;
 
 int lane_x(int lane) { return kMargin + lane * kLaneWidth + kLaneWidth / 2; }
+
+// Rounded joins and caps: the segments a flattened curve is drawn from meet
+// without facets, and a line ending at a dot meets it softly.
+wxPen graph_pen(const wxColour& colour) {
+    wxPen pen(colour, kLineWidth);
+    pen.SetJoin(wxJOIN_ROUND);
+    pen.SetCap(wxCAP_ROUND);
+    return pen;
+}
+
+// wxDC::DrawSpline approximates too coarsely over these short spans and leaves
+// visible corners, so the curve is flattened here instead — the shape is then
+// identical on every port.
+constexpr int kCurveSegments = 20;
+
+std::vector<wxPoint> flatten_cubic(double x0, double y0, double x1, double y1, double x2,
+                                   double y2, double x3, double y3) {
+    std::vector<wxPoint> points;
+    points.reserve(kCurveSegments + 1);
+    for (int i = 0; i <= kCurveSegments; ++i) {
+        const double t = static_cast<double>(i) / kCurveSegments;
+        const double u = 1.0 - t;
+        const double b0 = u * u * u;
+        const double b1 = 3.0 * u * u * t;
+        const double b2 = 3.0 * u * t * t;
+        const double b3 = t * t * t;
+        points.emplace_back(static_cast<int>(std::lround(b0 * x0 + b1 * x1 + b2 * x2 + b3 * x3)),
+                            static_cast<int>(std::lround(b0 * y0 + b1 * y1 + b2 * y2 + b3 * y3)));
+    }
+    return points;
+}
 
 } // namespace
 
@@ -90,7 +121,7 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
     // Straight runs go through the plain DC: pixel-aligned, no antialiasing,
     // so a lane reads as one solid line instead of a blurred double edge.
     const auto draw_vertical = [&](int x, int y1, int y2, const wxColour& colour) {
-        dc->SetPen(wxPen(colour, kLineWidth));
+        dc->SetPen(graph_pen(colour));
         dc->DrawLine(x, y1, x, y2);
     };
     std::vector<std::tuple<int, int, int, int, wxColour>> curves;
@@ -123,23 +154,18 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
         }
     }
 
-    // DrawSpline works on every wxDC — unlike wxGraphicsContext, which the
-    // DataView cell DC does not hand out on all ports. The line leaves the dot
-    // on a diagonal and settles into the target lane well before the row
-    // boundary, so it hands over to the next row already vertical. Only half a
-    // row of height is available for the whole transition, so an interior
-    // point directly below the dot would flatten the exit into a sideways
-    // stub.
+    // The control points pull the line out of the dot on a diagonal and settle
+    // it into the target lane vertically, so it hands over to the next row
+    // already straight and the whole path curves rather than turning corners.
     for (const auto& [x1, y1, x2, y2, colour] : curves) {
-        const int dy = y2 - y1;
-        const wxPoint points[] = {
-            wxPoint(x1, y1),
-            wxPoint(x1 + (x2 - x1) / 2, y1 + dy / 2),
-            wxPoint(x2, y2 - dy / 4),
-            wxPoint(x2, y2),
-        };
-        dc->SetPen(wxPen(colour, kLineWidth));
-        dc->DrawSpline(static_cast<int>(std::size(points)), points);
+        const double dx = x2 - x1;
+        const double dy = y2 - y1;
+        const auto points = flatten_cubic(x1, y1,                     // leave the dot
+                                          x1 + dx * 0.5, y1 + dy * 0.2, // diagonally
+                                          x2, y2 - dy * 0.6,            // settle upright
+                                          x2, y2);                      // reach the lane
+        dc->SetPen(graph_pen(colour));
+        dc->DrawLines(static_cast<int>(points.size()), points.data());
     }
 
     // No halo around the dot: it would be painted over the lane that runs into
