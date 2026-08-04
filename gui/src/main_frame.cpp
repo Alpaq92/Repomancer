@@ -131,27 +131,20 @@ MainFrame::MainFrame()
     // Wrapped, not clipped: a long subject or a wide body should reflow
     // rather than force horizontal scrolling, and the text needs room to
     // breathe away from the pane border.
-    // Every detail pane keeps the same inset from its border, applied with a
-    // sizer because neither wxListCtrl nor a multiline wxTextCtrl honours an
-    // internal margin on all ports.
-    const auto pad = [](wxPanel* panel, wxWindow* child) {
-        auto* sizer = new wxBoxSizer(wxVERTICAL);
-        sizer->Add(child, 1, wxEXPAND | wxALL, 8);
-        panel->SetSizer(sizer);
-        panel->SetBackgroundColour(child->GetBackgroundColour());
-    };
-
+    // The detail panes are inset from the inside — Scintilla's own text
+    // margins, and a blank spacer column in the file list. An outer sizer
+    // border on top of that would only push the scrollbars away from the pane
+    // edges and leave a gap under them, so each control fills its pane.
     // No wrapping: the pane is mostly hashes and identity lines, and breaking
     // a 40-character hash across two rows reads as damage rather than reflow.
     // The inset comes from a sizer border — wxTextCtrl::SetMargins is not
     // honoured for multiline text on every port — with SetMargins on top for
     // the ports that do take it.
-    auto* details_panel = new wxPanel(this);
     // A styled text control rather than wxTextCtrl: the latter ignores
     // SetMargins for multiline text on GTK, so its first character sits hard
     // against the frame. Read-only and unlexed, it is just a text pane with a
     // margin that works.
-    details_ = new wxStyledTextCtrl(details_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    details_ = new wxStyledTextCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                     wxBORDER_NONE);
     details_->SetReadOnly(true);
     details_->SetLexer(wxSTC_LEX_NULL);
@@ -169,21 +162,16 @@ MainFrame::MainFrame()
     details_->StyleSetBackground(wxSTC_STYLE_DEFAULT,
                                  wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
     details_->StyleClearAll();
-    pad(details_panel, details_);
 
-    auto* files_panel = new wxPanel(this);
-    files_ = new wxListCtrl(files_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    files_ = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                             wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
     // wxListCtrl has no internal margin, so a narrow blank column stands in
     // for one and keeps the first label off the border.
     files_->AppendColumn(wxEmptyString, wxLIST_FORMAT_LEFT, 8);
     files_->AppendColumn(_("Change"), wxLIST_FORMAT_LEFT, 90);
     files_->AppendColumn(_("File"), wxLIST_FORMAT_LEFT, 320);
-    pad(files_panel, files_);
 
-    auto* diff_panel = new wxPanel(this);
-    diff_ = new repomancer::gui::DiffView(diff_panel);
-    pad(diff_panel, diff_);
+    diff_ = new repomancer::gui::DiffView(this);
 
     refs_tree_ = new wxTreeCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                 wxTR_HAS_BUTTONS | wxTR_HIDE_ROOT | wxTR_NO_LINES |
@@ -200,20 +188,20 @@ MainFrame::MainFrame()
                                  .BestSize(230, -1)
                                  .MinSize(160, -1)
                                  .CloseButton(false));
-    aui_.AddPane(details_panel, wxAuiPaneInfo()
+    aui_.AddPane(details_, wxAuiPaneInfo()
                                .Bottom()
                                .Name("details")
                                .Caption(_("Commit details"))
                                .BestSize(360, 260)
                                .CloseButton(false));
-    aui_.AddPane(files_panel, wxAuiPaneInfo()
+    aui_.AddPane(files_, wxAuiPaneInfo()
                              .Bottom()
                              .Name("files")
                              .Caption(_("Changed files"))
                              .BestSize(360, 260)
                              .CloseButton(false)
                              .Position(1));
-    aui_.AddPane(diff_panel, wxAuiPaneInfo()
+    aui_.AddPane(diff_, wxAuiPaneInfo()
                             .Bottom()
                             .Name("diff")
                             .Caption(_("Diff"))
