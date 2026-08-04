@@ -349,6 +349,25 @@ void MainFrame::OnRefActivated(wxTreeEvent& event) {
     SetStatusText(wxString::Format(_("Ref: %s"), data->full_name()));
 }
 
+void MainFrame::RefreshLogRows() {
+    // wxGTK backs wxDataViewCtrl with a native GtkTreeView, which repaints a
+    // cell only when the model says the row changed — Refresh() alone leaves
+    // the old rendering on screen. Resetting re-queries every row; the
+    // selection is restored by index because a virtual list model addresses
+    // items that way.
+    const wxDataViewItem selected = log_view_->GetSelection();
+    const unsigned int selected_row = selected.IsOk() ? model_->GetRow(selected) : 0;
+    const bool had_selection = selected.IsOk();
+
+    model_->Reset(model_->GetCount());
+
+    if (had_selection && selected_row < model_->GetCount()) {
+        const wxDataViewItem item = model_->GetItem(selected_row);
+        log_view_->Select(item);
+        log_view_->EnsureVisible(item);
+    }
+}
+
 void MainFrame::OnFileSelected(wxListEvent& event) { ShowFileDiff(event.GetIndex()); }
 
 void MainFrame::ShowFileDiff(long index) {
@@ -374,7 +393,7 @@ void MainFrame::OnGraphStyleSelected(wxCommandEvent& event) {
     const auto style = event.GetId() == ID_StyleAngular ? repomancer::gui::GraphStyle::Angular
                                                         : repomancer::gui::GraphStyle::Rounded;
     graph_renderer_->SetStyle(style);
-    log_view_->Refresh();
+    RefreshLogRows();
 
     auto settings = repomancer::load_settings();
     settings.graph_style = repomancer::gui::graph_style_to_string(style);

@@ -40,6 +40,8 @@ private:
 
     void LoadRepository(const wxString& path);
     void ShowFileDiff(long index);
+    // Forces every visible row to be re-rendered, preserving the selection.
+    void RefreshLogRows();
     void PopulateRefs();
     // Sizes every column to its content and lets Subject absorb the rest.
     void FitColumns();
