@@ -16,6 +16,8 @@ namespace repomancer {
 struct Settings {
     // "system" | "light" | "dark"
     std::string theme = "system";
+    // "angular" | "rounded"
+    std::string graph_style = "angular";
 };
 
 // <config-base>/repomancer — %APPDATA% on Windows,

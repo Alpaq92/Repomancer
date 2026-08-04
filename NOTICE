@@ -12,6 +12,12 @@ licenses and are not part of this distribution.
 Third-party work reimplemented in this product
 --------------------------------------------------------------------------
 
+Open Color — https://yeun.github.io/open-color/
+Copyright (c) 2016 heeyeun
+Licensed under the MIT License.
+
+  The commit graph's lane colours are Open Color's shade-6 steps.
+
 git-graph — https://github.com/git-bahn/git-graph
 Copyright (c) 2021 Martin Lange
 Licensed under the MIT License.

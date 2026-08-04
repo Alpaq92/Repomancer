@@ -57,11 +57,29 @@ std::vector<wxPoint> flatten_cubic(double x0, double y0, double x1, double y1, d
 
 } // namespace
 
+GraphStyle graph_style_from_string(std::string_view value) {
+    return value == "rounded" ? GraphStyle::Rounded : GraphStyle::Angular;
+}
+
+const char* graph_style_to_string(GraphStyle style) {
+    return style == GraphStyle::Rounded ? "rounded" : "angular";
+}
+
 wxColour lane_colour(int index) {
+    // Open Color (https://yeun.github.io/open-color/, MIT) shade 6 — the step
+    // designed to stay legible against both light and dark backgrounds. The
+    // order is fixed: branch classes index into it (see branch_class_color).
     static const wxColour palette[] = {
-        wxColour(0x4E, 0x79, 0xA7), wxColour(0xF2, 0x8E, 0x2B), wxColour(0x59, 0xA1, 0x4F),
-        wxColour(0xE1, 0x57, 0x59), wxColour(0xB0, 0x7A, 0xA1), wxColour(0x76, 0xB7, 0xB2),
-        wxColour(0xED, 0xC9, 0x48), wxColour(0xFF, 0x9D, 0xA7),
+        wxColour(0x22, 0x8B, 0xE6), // blue-6   — main
+        wxColour(0xFD, 0x7E, 0x14), // orange-6
+        wxColour(0x40, 0xC0, 0x57), // green-6  — feature
+        wxColour(0xFA, 0x52, 0x52), // red-6    — hotfix
+        wxColour(0xBE, 0x4B, 0xDB), // grape-6  — release
+        wxColour(0x12, 0xB8, 0x86), // teal-6   — bugfix
+        wxColour(0xFA, 0xB0, 0x05), // yellow-6 — develop
+        wxColour(0xE6, 0x49, 0x80), // pink-6
+        wxColour(0x15, 0xAA, 0xBF), // cyan-6
+        wxColour(0x79, 0x50, 0xF2), // violet-6
     };
     constexpr int count = static_cast<int>(sizeof(palette) / sizeof(palette[0]));
     if (index < 0) {
@@ -124,7 +142,20 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
         dc->SetPen(graph_pen(colour));
         dc->DrawLine(x, y1, x, y2);
     };
-    std::vector<std::tuple<int, int, int, int, wxColour>> curves;
+    // Which end of a transition must be vertical. A line is only ever diagonal
+    // next to the dot it belongs to; at a row boundary it has to be upright, or
+    // it meets the straight run in the neighbouring row at an angle.
+    enum class CurveKind {
+        FromDot,  // dot → lane below: diagonal exit, upright arrival
+        IntoDot,  // lane above → dot: upright exit, diagonal arrival
+        Crossing, // passes the row without touching the dot: upright at both ends
+    };
+    struct Curve {
+        int x1, y1, x2, y2;
+        wxColour colour;
+        CurveKind kind;
+    };
+    std::vector<Curve> curves;
 
     // Lines first, dot last, so the dot always sits on top.
     for (const auto& segment : row->pass) {
@@ -133,7 +164,8 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
         if (from_x == to_x) {
             draw_vertical(from_x, top_run, bottom_run, lane_colour(segment.color));
         } else {
-            curves.emplace_back(from_x, top, to_x, bottom, lane_colour(segment.color));
+            curves.push_back({from_x, top, to_x, bottom, lane_colour(segment.color),
+                              CurveKind::Crossing});
         }
     }
     for (const auto& edge : row->children_in) {
@@ -142,7 +174,8 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
             // Stops at the dot: a lane that ends here must not sprout a stub.
             draw_vertical(x, top_run, middle, lane_colour(edge.color));
         } else {
-            curves.emplace_back(x, top, dot_x, middle, lane_colour(edge.color));
+            curves.push_back(
+                {x, top, dot_x, middle, lane_colour(edge.color), CurveKind::IntoDot});
         }
     }
     for (const auto& edge : row->parents_out) {
@@ -150,21 +183,40 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
         if (x == dot_x) {
             draw_vertical(x, middle, bottom_run, lane_colour(edge.color));
         } else {
-            curves.emplace_back(dot_x, middle, x, bottom, lane_colour(edge.color));
+            curves.push_back(
+                {dot_x, middle, x, bottom, lane_colour(edge.color), CurveKind::FromDot});
         }
     }
 
-    // The control points pull the line out of the dot on a diagonal and settle
-    // it into the target lane vertically, so it hands over to the next row
-    // already straight and the whole path curves rather than turning corners.
-    for (const auto& [x1, y1, x2, y2, colour] : curves) {
-        const double dx = x2 - x1;
-        const double dy = y2 - y1;
-        const auto points = flatten_cubic(x1, y1,                     // leave the dot
-                                          x1 + dx * 0.5, y1 + dy * 0.2, // diagonally
-                                          x2, y2 - dy * 0.6,            // settle upright
-                                          x2, y2);                      // reach the lane
-        dc->SetPen(graph_pen(colour));
+    for (const auto& curve : curves) {
+        dc->SetPen(graph_pen(curve.colour));
+        if (style_ == GraphStyle::Angular) {
+            // Git Extensions / git-graph: the line runs straight from where it
+            // leaves to where it arrives. Round caps take the hard edge off the
+            // corner it forms with the run in the neighbouring row.
+            dc->DrawLine(curve.x1, curve.y1, curve.x2, curve.y2);
+            continue;
+        }
+
+        const double dx = curve.x2 - curve.x1;
+        const double dy = curve.y2 - curve.y1;
+        // A control point placed straight below its anchor holds the tangent
+        // upright there; offsetting it sideways lets the line lean into the
+        // dot. Every end that lands on a row boundary keeps the upright one,
+        // so the curve meets the straight run in the next row head-on.
+        double c1x = curve.x1;
+        double c1y = curve.y1 + dy * 0.55;
+        double c2x = curve.x2;
+        double c2y = curve.y2 - dy * 0.55;
+        if (curve.kind == CurveKind::FromDot) {
+            c1x = curve.x1 + dx * 0.5;
+            c1y = curve.y1 + dy * 0.2;
+        } else if (curve.kind == CurveKind::IntoDot) {
+            c2x = curve.x2 - dx * 0.5;
+            c2y = curve.y2 - dy * 0.2;
+        }
+        const auto points =
+            flatten_cubic(curve.x1, curve.y1, c1x, c1y, c2x, c2y, curve.x2, curve.y2);
         dc->DrawLines(static_cast<int>(points.size()), points.data());
     }
 
