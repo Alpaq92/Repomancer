@@ -4,9 +4,10 @@
 
 Please **do not** open a public issue for security problems.
 
-Use GitHub's private vulnerability reporting ("Report a vulnerability" under
-the Security tab) once the repository is public, or email the maintainer
-directly. You should receive an acknowledgement within 7 days.
+Use GitHub's private vulnerability reporting:
+<https://github.com/Alpaq92/Repomancer/security/advisories/new>
+(enable it under Settings → Code security if the link 404s), or email the
+maintainer directly. You should receive an acknowledgement within 7 days.
 
 Please include: affected version/commit, platform, reproduction steps, and
 impact assessment. Coordinated disclosure is appreciated; we aim to ship fixes

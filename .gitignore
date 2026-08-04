@@ -6,13 +6,23 @@ out/
 vcpkg/
 vcpkg_installed/
 
+# User-local CMake presets
+CMakeUserPresets.json
+
 # IDE / editor
 .vscode/
 .idea/
+.vs/
 .cache/
 compile_commands.json
 *.user
+*.swp
+*~
+
+# Tooling state
+.claude/settings.local.json
 
 # OS noise
 .DS_Store
 Thumbs.db
+.directory
