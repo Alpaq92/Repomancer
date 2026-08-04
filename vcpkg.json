@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "repomancer",
+  "version-string": "0.1.0",
+  "description": "Cross-platform TortoiseGit-inspired GUI frontend for locally installed VCS binaries",
+  "license": "Apache-2.0",
+  "builtin-baseline": "f1d4bbc72f183441403ba5107cb19d75a5abc2a2",
+  "dependencies": [
+    "reproc",
+    "nlohmann-json",
+    "fmt",
+    "spdlog",
+    "sqlite3",
+    "catch2"
+  ],
+  "features": {
+    "gui": {
+      "description": "Build the wxWidgets GUI application",
+      "dependencies": [
+        "wxwidgets"
+      ]
+    }
+  }
+}

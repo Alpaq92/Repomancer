@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: Apache-2.0
+# CI: 3-OS build + test matrix with vcpkg binary caching, plus an
+# ASan/UBSan job (implementation-plan.md §1, §13.2).
+# Third-party actions are pinned by commit SHA (§13.6).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  VCPKG_COMMIT: f1d4bbc72f183441403ba5107cb19d75a5abc2a2
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-gcc
+            os: ubuntu-latest
+            configure-preset: linux-release
+            test-preset: linux-release
+            vcpkg-cache: ~/.cache/vcpkg/archives
+          - name: macos-clang
+            os: macos-latest
+            configure-preset: macos-release
+            test-preset: macos-release
+            vcpkg-cache: ~/.cache/vcpkg/archives
+          - name: windows-msvc
+            os: windows-latest
+            configure-preset: windows-msvc-release
+            test-preset: windows-msvc-release
+            vcpkg-cache: ~/AppData/Local/vcpkg/archives
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libgtk-3-dev libsecret-1-dev \
+            libx11-dev libxext-dev libxft-dev libxi-dev libxrandr-dev libxtst-dev
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ matrix.vcpkg-cache }}
+          key: vcpkg-${{ matrix.name }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ matrix.name }}-
+
+      - name: Set up vcpkg
+        shell: bash
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "${{ github.workspace }}/vcpkg-tool"
+          git -C "${{ github.workspace }}/vcpkg-tool" checkout "$VCPKG_COMMIT"
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg-tool" >> "$GITHUB_ENV"
+      - name: Bootstrap vcpkg (POSIX)
+        if: runner.os != 'Windows'
+        run: "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+        shell: bash
+      - name: Bootstrap vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: '& "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics'
+        shell: pwsh
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.configure-preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.configure-preset }}
+      - name: Test
+        run: ctest --preset ${{ matrix.test-preset }}
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: logs-${{ matrix.name }}
+          path: |
+            build/**/CMakeFiles/CMakeConfigureLog.yaml
+            build/**/Testing/**/*.log
+            build/**/vcpkg-manifest-install.log
+          if-no-files-found: ignore
+
+  sanitize:
+    name: linux-asan-ubsan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-asan-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-asan-
+      - name: Set up vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "${{ github.workspace }}/vcpkg-tool"
+          git -C "${{ github.workspace }}/vcpkg-tool" checkout "$VCPKG_COMMIT"
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg-tool" >> "$GITHUB_ENV"
+      - name: Bootstrap vcpkg
+        run: "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+      - name: Configure
+        run: cmake --preset linux-asan
+      - name: Build
+        run: cmake --build --preset linux-asan
+      - name: Test
+        run: ctest --preset linux-asan

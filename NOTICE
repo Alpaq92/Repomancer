@@ -1,0 +1,8 @@
+Repomancer
+Copyright 2026 Repomancer contributors
+
+Licensed under the Apache License, Version 2.0.
+
+This product drives locally installed version-control tools (git, svn, hg)
+as external processes; those tools are separate works under their own
+licenses and are not part of this distribution.
