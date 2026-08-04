@@ -1,51 +1,62 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Repomancer contributors
 //
-// The strip that titles a docked pane. It is a real wxHeaderCtrl, drawn by the
-// platform's header renderer, so a pane is labelled by the same kind of
-// control that titles the log's columns rather than by something painted to
-// resemble one.
+// The strip that titles a docked pane.
+//
+// It paints itself with wxRendererNative::DrawHeaderButton — the very call the
+// list control uses for its own column headers — so a pane title and a column
+// title are the same drawing, not two things adjusted until they look alike. A
+// wxHeaderCtrl was the obvious choice but takes a different path on GTK and
+// comes out flat, so the two never matched.
 
 #pragma once
 
-#include <wx/headerctrl.h>
+#include <wx/control.h>
+#include <wx/dcbuffer.h>
+#include <wx/renderer.h>
+#include <wx/settings.h>
 
 #include <utility>
 
 namespace repomancer::gui {
 
-class PaneHeader : public wxHeaderCtrl {
+class PaneHeader : public wxControl {
 public:
     PaneHeader(wxWindow* parent, wxString title)
-        // wxBORDER_SIMPLE outlines the strip: GTK draws a lone header column
-        // flat with only a hairline beneath it, which does not read as the
-        // same object as the log's outlined column headers.
-        : wxHeaderCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                       wxHD_DEFAULT_STYLE | wxBORDER_SIMPLE),
-          column_(std::move(title)) {
-        SetColumnCount(1);
-        // Give the column a width before the first paint, so the strip is
-        // drawn as a header button rather than as empty header background.
-        column_.SetWidth(parent->GetClientSize().GetWidth());
-        // The single column spans the pane, so the title reads as the pane's
-        // own header rather than one column of several.
-        Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
-            event.Skip();
-            column_.SetWidth(GetClientSize().GetWidth());
-            UpdateColumn(0);
-        });
+        : wxControl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE),
+          title_(std::move(title)) {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        Bind(wxEVT_PAINT, &PaneHeader::OnPaint, this);
     }
 
     void SetTitle(const wxString& title) {
-        column_.SetTitle(title);
-        UpdateColumn(0);
+        title_ = title;
+        Refresh();
     }
 
 protected:
-    const wxHeaderColumn& GetColumn(unsigned int) const override { return column_; }
+    wxSize DoGetBestClientSize() const override {
+        return wxSize(-1, wxRendererNative::Get().GetHeaderButtonHeight(
+                              const_cast<PaneHeader*>(this)));
+    }
 
 private:
-    wxHeaderColumnSimple column_;
+    void OnPaint(wxPaintEvent&) {
+        wxAutoBufferedPaintDC dc(this);
+        dc.SetBackground(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+        dc.Clear();
+
+        wxHeaderButtonParams params;
+        params.m_labelText = title_;
+        params.m_labelAlignment = wxALIGN_LEFT | wxALIGN_CENTRE_VERTICAL;
+        params.m_labelColour = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
+
+        wxRect rect(GetClientSize());
+        wxRendererNative::Get().DrawHeaderButton(this, dc, rect, 0, wxHDR_SORT_ICON_NONE,
+                                                 &params);
+    }
+
+    wxString title_;
 };
 
 } // namespace repomancer::gui
