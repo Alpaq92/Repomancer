@@ -454,7 +454,34 @@ void MainFrame::ApplyThemeToWidgets() {
 
     // A fresh art provider is the supported way to make wxAUI re-read the
     // system palette; the existing one has no refresh entry point.
-    aui_.SetArtProvider(new wxAuiDefaultDockArt);
+    auto* art = new wxAuiDefaultDockArt;
+    aui_.SetArtProvider(art);
+
+    // Pane captions are styled as column headers, so a docked pane is
+    // labelled the same way the log's columns are: flat, in the button face
+    // colour, with the interface font rather than wxAUI's gradient bar.
+    const wxColour header_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+    const wxColour header_fg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
+    const wxFont header_font = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+
+    art->SetMetric(wxAUI_DOCKART_GRADIENT_TYPE, wxAUI_GRADIENT_NONE);
+    art->SetColour(wxAUI_DOCKART_ACTIVE_CAPTION_COLOUR, header_bg);
+    art->SetColour(wxAUI_DOCKART_INACTIVE_CAPTION_COLOUR, header_bg);
+    art->SetColour(wxAUI_DOCKART_ACTIVE_CAPTION_TEXT_COLOUR, header_fg);
+    art->SetColour(wxAUI_DOCKART_INACTIVE_CAPTION_TEXT_COLOUR, header_fg);
+    art->SetColour(wxAUI_DOCKART_BORDER_COLOUR, header_bg);
+    art->SetColour(wxAUI_DOCKART_SASH_COLOUR, header_bg);
+    art->SetColour(wxAUI_DOCKART_BACKGROUND_COLOUR, header_bg);
+    art->SetFont(wxAUI_DOCKART_CAPTION_FONT, header_font);
+    art->SetMetric(wxAUI_DOCKART_PANE_BORDER_SIZE, 1);
+
+    // Sized from the same font the header draws with, so the two read as the
+    // same kind of strip. The control's own header cannot be measured here:
+    // wxDataViewCtrl only exposes it in its generic implementation, and GTK
+    // uses the native one.
+    art->SetMetric(wxAUI_DOCKART_CAPTION_SIZE,
+                   GetTextExtent("Ag").GetHeight() + 10);
+
     aui_.Update();
 
     Refresh();
