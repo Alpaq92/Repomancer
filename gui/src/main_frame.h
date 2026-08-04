@@ -45,6 +45,8 @@ private:
     void SetDetailsText(const wxString& text);
     // Re-reads system colours into everything that caches them.
     void ApplyThemeToWidgets();
+    // Relaunches the application so a new theme actually takes effect.
+    void RestartForTheme();
     void PopulateRefs();
     // Sizes every column to its content and lets Subject absorb the rest.
     void FitColumns();

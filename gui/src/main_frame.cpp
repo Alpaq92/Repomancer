@@ -15,6 +15,8 @@
 #include <wx/panel.h>
 #include <wx/aui/dockart.h>
 #include <wx/settings.h>
+#include <wx/stdpaths.h>
+#include <wx/utils.h>
 #include <wx/treectrl.h>
 #include <wx/sizer.h>
 
@@ -405,6 +407,25 @@ void MainFrame::OnRefActivated(wxTreeEvent& event) {
     SetStatusText(wxString::Format(_("Ref: %s"), data->full_name()));
 }
 
+void MainFrame::RestartForTheme() {
+    // Where the toolkit cannot restyle windows that already exist, the way to
+    // honour the choice is to start again with it: the theme is resolved when
+    // a window is created, so a fresh process gets it right. The setting is
+    // already on disk, and the open repository rides across on the command
+    // line so the new window comes up where this one left off.
+    //
+    // Nothing here is unsaved yet. Once editing lands this has to run the
+    // save prompts first, because Close(true) cannot be vetoed.
+    Hide();
+
+    wxString command = "\"" + wxStandardPaths::Get().GetExecutablePath() + "\"";
+    if (!repo_path_.empty()) {
+        command += " \"" + wxString::FromUTF8(repo_path_.string()) + "\"";
+    }
+    wxExecute(command, wxEXEC_ASYNC);
+    Close(true);
+}
+
 void MainFrame::ApplyThemeToWidgets() {
     // Anything that reads a system colour once and keeps it has to be told to
     // read again: Scintilla styles are fixed at the time they are set, and
@@ -524,8 +545,7 @@ void MainFrame::OnThemeSelected(wxCommandEvent& event) {
     repomancer::save_settings(settings);
 
     if (!applied_live) {
-        wxMessageBox(_("The theme will be applied after restarting Repomancer."),
-                     _("Repomancer"), wxOK | wxICON_INFORMATION, this);
+        RestartForTheme();
     }
 }
 
