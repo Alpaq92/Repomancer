@@ -4,6 +4,7 @@
 #include "repo_view.h"
 
 #include <wx/dc.h>
+#include <wx/dcclient.h>
 #include <wx/settings.h>
 #include <wx/utils.h>
 
@@ -77,14 +78,17 @@ public:
             // A heading is any line that is not indented under one.
             const bool heading = !line.empty() && line[0] != ' ';
             dc->SetFont(heading ? base.Bold() : base);
-            const int height = dc->GetTextExtent(line.empty() ? " " : line).GetHeight();
+            const wxSize extent = dc->GetTextExtent(line.empty() ? " " : line);
             const bool highlit =
                 selected_line_ != nullptr && static_cast<int>(i) == *selected_line_;
             if (highlit) {
+                // A chip hugging the label — the same bounds the hit-test
+                // accepts, so what lights up is exactly what was clickable.
                 dc->SetPen(*wxTRANSPARENT_PEN);
                 dc->SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
-                dc->DrawRectangle(cell.GetLeft() + 2, y - 1, cell.GetWidth() - 4,
-                                  height + kLeading);
+                dc->DrawRoundedRectangle(cell.GetLeft() + kPadding - 4, y - 1,
+                                         extent.GetWidth() + 12, extent.GetHeight() + 2,
+                                         3);
                 dc->SetTextForeground(
                     wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
             }
@@ -92,7 +96,7 @@ public:
             if (highlit) {
                 dc->SetTextForeground(fg);
             }
-            y += height + kLeading;
+            y += extent.GetHeight() + kLeading;
         }
         dc->SetFont(base);
         return true;
@@ -192,20 +196,26 @@ int RepoView::LineAt(const wxPoint& point) {
     if (!cell.Contains(point)) {
         return -1;
     }
-    // The same walk the renderer paints by: kPadding of headroom, then each
-    // line's own height plus its leading.
+    // The same walk the renderer paints by — headings measured in the bold
+    // they are drawn in, so the bands cannot drift apart — and an item is
+    // only its label: a click in the blank space beside it is no click on it.
+    wxClientDC dc(this);
+    const wxFont base = GetFont();
     int y = cell.GetTop() + kPadding;
     for (std::size_t i = 0; i < lines_.size(); ++i) {
         if (point.y < y) {
             return -1; // in the headroom above the first line
         }
         const wxString& line = lines_[i];
-        const int height =
-            GetTextExtent(line.empty() ? wxString(" ") : line).GetHeight() + kLeading;
-        if (point.y < y + height) {
-            return static_cast<int>(i);
+        const bool heading = !line.empty() && line[0] != ' ';
+        dc.SetFont(heading ? base.Bold() : base);
+        const wxSize extent = dc.GetTextExtent(line.empty() ? wxString(" ") : line);
+        if (point.y < y + extent.GetHeight() + kLeading) {
+            const int left = cell.GetLeft() + kPadding - 4;
+            const int right = cell.GetLeft() + kPadding + extent.GetWidth() + 8;
+            return (point.x >= left && point.x <= right) ? static_cast<int>(i) : -1;
         }
-        y += height;
+        y += extent.GetHeight() + kLeading;
     }
     return -1;
 }
