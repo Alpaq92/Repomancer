@@ -78,3 +78,45 @@ TEST_CASE("graph layout: unclassified heads still reuse freed lanes") {
     CHECK(layout.rows[1].lane == 0);
     CHECK(layout.max_lanes == 1);
 }
+
+TEST_CASE("graph layout: main keeps the left-most lane even when reached later") {
+    // develop's tip comes first in topological order; without a reservation it
+    // would claim lane 0 and push the mainline right.
+    const std::vector<Commit> commits = {
+        head("d2", "HEAD -> develop", {"d1"}),
+        head("d1", "", {"base"}),
+        head("m1", "main", {"base"}),
+        head("base", ""),
+    };
+    const auto layout = compute_graph_layout(commits);
+    REQUIRE(layout.rows.size() == 4);
+    CHECK(layout.rows[2].lane == 0); // main
+    CHECK(layout.rows[0].lane == 1); // develop steps over the reserved column
+    CHECK(layout.rows[2].color == branch_class_color(BranchClass::Main));
+    CHECK(layout.rows[0].color == branch_class_color(BranchClass::Develop));
+}
+
+TEST_CASE("graph layout: develop takes lane 0 when there is no main") {
+    const std::vector<Commit> commits = {
+        head("d2", "HEAD -> develop", {"d1"}),
+        head("d1", ""),
+    };
+    const auto layout = compute_graph_layout(commits);
+    REQUIRE(layout.rows.size() == 2);
+    CHECK(layout.rows[0].lane == 0);
+    CHECK(layout.max_lanes == 1);
+}
+
+TEST_CASE("graph layout: topic branches do not reserve columns") {
+    // Only persistent classes reserve; three feature tips must not open three
+    // columns before any of them is reached.
+    const std::vector<Commit> commits = {
+        head("f1", "feature/a", {"base"}),
+        head("f2", "feature/b", {"base"}),
+        head("base", ""),
+    };
+    const auto layout = compute_graph_layout(commits);
+    REQUIRE(layout.rows.size() == 3);
+    CHECK(layout.rows[0].lane == 0);
+    CHECK(layout.max_lanes == 2);
+}

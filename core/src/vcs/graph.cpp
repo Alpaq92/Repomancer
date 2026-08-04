@@ -27,30 +27,8 @@ int find_lane_waiting_for(const std::vector<LaneState>& lanes, const std::string
     return kNoLane;
 }
 
-// `preferred` is the left-most lane this branch would like to occupy; the
-// search falls back to any free lane so a busy graph never stalls.
-int allocate_lane(std::vector<LaneState>& lanes, int lane_cap, int preferred = 0) {
-    preferred = std::clamp(preferred, 0, lane_cap - 1);
-    for (std::size_t i = static_cast<std::size_t>(preferred); i < lanes.size(); ++i) {
-        if (lanes[i].waiting_for.empty()) {
-            return static_cast<int>(i);
-        }
-    }
-    if (static_cast<int>(lanes.size()) < lane_cap) {
-        while (static_cast<int>(lanes.size()) < preferred) {
-            lanes.emplace_back();
-        }
-        lanes.emplace_back();
-        return static_cast<int>(lanes.size()) - 1;
-    }
-    for (std::size_t i = 0; i < lanes.size(); ++i) {
-        if (lanes[i].waiting_for.empty()) {
-            return static_cast<int>(i);
-        }
-    }
-    // Pathological width: fold everything into the last lane rather than
-    // growing without bound.
-    return lane_cap - 1;
+bool lane_is_free(const std::vector<LaneState>& lanes, std::size_t index) {
+    return index < lanes.size() && lanes[index].waiting_for.empty();
 }
 
 int active_width(const std::vector<LaneState>& lanes) {
@@ -101,8 +79,82 @@ GraphLayout compute_graph_layout(const std::vector<Commit>& commits,
                    : std::min(branch_class_order(cls), static_cast<int>(lanes_in_use));
     };
 
+    // Long-lived branches get their column reserved before the walk starts.
+    // Without this the left-most lane simply goes to whichever tip topological
+    // order happens to reach first, so `main` could end up to the right of a
+    // topic branch and the mainline would shift columns between views. Only
+    // persistent classes are reserved: doing it for every feature branch would
+    // open a column per branch and leave the graph full of empty gutters.
+    std::unordered_map<std::string, int> reserved_lane;
+    std::unordered_map<int, std::string> reservation_by_lane;
+    if (!class_by_hash.empty()) {
+        struct Tip {
+            int order;
+            std::size_t index;
+            const std::string* hash;
+        };
+        std::vector<Tip> tips;
+        for (std::size_t i = 0; i < commits.size(); ++i) {
+            const BranchClass cls = class_of(commits[i].hash);
+            if (cls == BranchClass::Main || cls == BranchClass::Develop) {
+                tips.push_back(Tip{branch_class_order(cls), i, &commits[i].hash});
+            }
+        }
+        std::sort(tips.begin(), tips.end(), [](const Tip& a, const Tip& b) {
+            return a.order != b.order ? a.order < b.order : a.index < b.index;
+        });
+        for (std::size_t n = 0; n < tips.size() && static_cast<int>(n) < lane_cap; ++n) {
+            reserved_lane.emplace(*tips[n].hash, static_cast<int>(n));
+            reservation_by_lane.emplace(static_cast<int>(n), *tips[n].hash);
+        }
+    }
+
     std::vector<LaneState> lanes;
     int next_color = 0;
+
+    // Claims a lane for the commit `hash` is waiting for, honouring that
+    // branch's reservation when it has one and stepping over columns still
+    // held for a branch not yet reached.
+    const auto take_lane = [&](const std::string& hash, BranchClass cls) -> int {
+        if (const auto it = reserved_lane.find(hash); it != reserved_lane.end()) {
+            const int lane = it->second;
+            while (static_cast<int>(lanes.size()) <= lane) {
+                lanes.emplace_back();
+            }
+            reservation_by_lane.erase(lane);
+            reserved_lane.erase(it);
+            if (lanes[static_cast<std::size_t>(lane)].waiting_for.empty()) {
+                return lane;
+            }
+            // Someone already occupies it; fall through and take what is free.
+        }
+
+        const int preferred = preferred_lane(cls, lanes.size());
+        for (int pass = 0; pass < 2; ++pass) {
+            const std::size_t from = pass == 0 ? static_cast<std::size_t>(preferred) : 0;
+            for (std::size_t i = from; i < lanes.size(); ++i) {
+                if (lane_is_free(lanes, i) &&
+                    reservation_by_lane.find(static_cast<int>(i)) ==
+                        reservation_by_lane.end()) {
+                    return static_cast<int>(i);
+                }
+            }
+        }
+        if (static_cast<int>(lanes.size()) < lane_cap) {
+            lanes.emplace_back();
+            return static_cast<int>(lanes.size()) - 1;
+        }
+        // Out of room: take a reserved-but-still-free column rather than stall.
+        for (std::size_t i = 0; i < lanes.size(); ++i) {
+            if (lane_is_free(lanes, i)) {
+                reservation_by_lane.erase(static_cast<int>(i));
+                return static_cast<int>(i);
+            }
+        }
+        // Pathological width: fold everything into the last lane rather than
+        // growing without bound.
+        return lane_cap - 1;
+    };
 
     for (const auto& commit : commits) {
         GraphRow row;
@@ -119,7 +171,7 @@ GraphLayout compute_graph_layout(const std::vector<Commit>& commits,
             // A branch head nobody pointed at yet: its refs say which branch
             // it is, so the lane can be placed and coloured by class.
             const BranchClass cls = class_of(commit.hash);
-            row.lane = allocate_lane(lanes, lane_cap, preferred_lane(cls, lanes.size()));
+            row.lane = take_lane(commit.hash, cls);
             const int class_color = branch_class_color(cls);
             lanes[static_cast<std::size_t>(row.lane)].color =
                 class_color >= 0 ? class_color : next_color++;
@@ -151,7 +203,7 @@ GraphLayout compute_graph_layout(const std::vector<Commit>& commits,
                 int lane = find_lane_waiting_for(lanes, parent);
                 if (lane == kNoLane) {
                     const BranchClass cls = class_of(parent);
-                    lane = allocate_lane(lanes, lane_cap, preferred_lane(cls, lanes.size()));
+                    lane = take_lane(parent, cls);
                     lanes[static_cast<std::size_t>(lane)].waiting_for = parent;
                     const int class_color = branch_class_color(cls);
                     lanes[static_cast<std::size_t>(lane)].color =
