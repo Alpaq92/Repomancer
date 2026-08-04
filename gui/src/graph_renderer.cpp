@@ -124,16 +124,18 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
     }
 
     // DrawSpline works on every wxDC — unlike wxGraphicsContext, which the
-    // DataView cell DC does not hand out on all ports. The two interior
-    // points sit directly below the start and above the end, so the spline
-    // leaves and enters its lane vertically and the join with the next row is
-    // invisible.
+    // DataView cell DC does not hand out on all ports. The line leaves the dot
+    // on a diagonal and settles into the target lane well before the row
+    // boundary, so it hands over to the next row already vertical. Only half a
+    // row of height is available for the whole transition, so an interior
+    // point directly below the dot would flatten the exit into a sideways
+    // stub.
     for (const auto& [x1, y1, x2, y2, colour] : curves) {
         const int dy = y2 - y1;
         const wxPoint points[] = {
             wxPoint(x1, y1),
-            wxPoint(x1, y1 + dy / 3),
-            wxPoint(x2, y2 - dy / 3),
+            wxPoint(x1 + (x2 - x1) / 2, y1 + dy / 2),
+            wxPoint(x2, y2 - dy / 4),
             wxPoint(x2, y2),
         };
         dc->SetPen(wxPen(colour, kLineWidth));
