@@ -130,6 +130,16 @@ MainFrame::MainFrame()
     // Wrapped, not clipped: a long subject or a wide body should reflow
     // rather than force horizontal scrolling, and the text needs room to
     // breathe away from the pane border.
+    // Every detail pane keeps the same inset from its border, applied with a
+    // sizer because neither wxListCtrl nor a multiline wxTextCtrl honours an
+    // internal margin on all ports.
+    const auto pad = [](wxPanel* panel, wxWindow* child) {
+        auto* sizer = new wxBoxSizer(wxVERTICAL);
+        sizer->Add(child, 1, wxEXPAND | wxALL, 8);
+        panel->SetSizer(sizer);
+        panel->SetBackgroundColour(child->GetBackgroundColour());
+    };
+
     // No wrapping: the pane is mostly hashes and identity lines, and breaking
     // a 40-character hash across two rows reads as damage rather than reflow.
     // The inset comes from a sizer border — wxTextCtrl::SetMargins is not
@@ -141,17 +151,18 @@ MainFrame::MainFrame()
                               wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP | wxBORDER_NONE);
     details_->SetFont(wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
     details_->SetMargins(wxPoint(6, 6));
-    auto* details_sizer = new wxBoxSizer(wxVERTICAL);
-    details_sizer->Add(details_, 1, wxEXPAND | wxALL, 8);
-    details_panel->SetSizer(details_sizer);
-    details_panel->SetBackgroundColour(details_->GetBackgroundColour());
+    pad(details_panel, details_);
 
-    files_ = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                            wxLC_REPORT | wxLC_SINGLE_SEL);
+    auto* files_panel = new wxPanel(this);
+    files_ = new wxListCtrl(files_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                            wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
     files_->AppendColumn(_("Change"), wxLIST_FORMAT_LEFT, 90);
     files_->AppendColumn(_("File"), wxLIST_FORMAT_LEFT, 320);
+    pad(files_panel, files_);
 
-    diff_ = new repomancer::gui::DiffView(this);
+    auto* diff_panel = new wxPanel(this);
+    diff_ = new repomancer::gui::DiffView(diff_panel);
+    pad(diff_panel, diff_);
 
     refs_tree_ = new wxTreeCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                 wxTR_HAS_BUTTONS | wxTR_HIDE_ROOT | wxTR_NO_LINES |
@@ -174,14 +185,14 @@ MainFrame::MainFrame()
                                .Caption(_("Commit details"))
                                .BestSize(360, 260)
                                .CloseButton(false));
-    aui_.AddPane(files_, wxAuiPaneInfo()
+    aui_.AddPane(files_panel, wxAuiPaneInfo()
                              .Bottom()
                              .Name("files")
                              .Caption(_("Changed files"))
                              .BestSize(360, 260)
                              .CloseButton(false)
                              .Position(1));
-    aui_.AddPane(diff_, wxAuiPaneInfo()
+    aui_.AddPane(diff_panel, wxAuiPaneInfo()
                             .Bottom()
                             .Name("diff")
                             .Caption(_("Diff"))
