@@ -6,6 +6,7 @@ add_executable(repomancer WIN32 MACOSX_BUNDLE
   src/main.cpp
   src/main_frame.cpp
   src/log_model.cpp
+  src/repo_view.cpp
   src/graph_renderer.cpp
   src/diff_view.cpp
   src/theme.cpp

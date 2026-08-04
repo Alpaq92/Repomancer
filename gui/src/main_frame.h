@@ -6,13 +6,13 @@
 #include "diff_view.h"
 #include "graph_renderer.h"
 #include "pane_header.h"
+#include "repo_view.h"
 #include "log_model.h"
 
 #include <wx/aui/aui.h>
 #include <wx/dataview.h>
 #include <wx/frame.h>
 #include <wx/listctrl.h>
-#include <wx/treectrl.h>
 #include <wx/stc/stc.h>
 
 #include <atomic>
@@ -37,7 +37,6 @@ private:
     void OnAbout(wxCommandEvent& event);
     void OnCommitSelected(wxDataViewEvent& event);
     void OnFileSelected(wxListEvent& event);
-    void OnRefActivated(wxTreeEvent& event);
 
     void LoadRepository(const wxString& path);
     void ShowFileDiff(long index);
@@ -48,14 +47,14 @@ private:
     void ApplyThemeToWidgets();
     // Relaunches the application so a new theme actually takes effect.
     void RestartForTheme();
-    void PopulateRefs();
+    void PopulateRepoDetails();
     // Sizes every column to its content and lets Subject absorb the rest.
     void FitColumns();
 
     wxAuiManager aui_;
     wxDataViewCtrl* log_view_ = nullptr;
     wxStyledTextCtrl* details_ = nullptr;
-    wxTreeCtrl* refs_tree_ = nullptr;
+    repomancer::gui::RepoView* repo_view_ = nullptr;
     wxListCtrl* files_ = nullptr;
     repomancer::gui::DiffView* diff_ = nullptr;
     wxObjectDataPtr<CommitLogModel> model_;

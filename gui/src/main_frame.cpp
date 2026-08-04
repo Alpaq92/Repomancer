@@ -18,7 +18,6 @@
 #include <wx/settings.h>
 #include <wx/stdpaths.h>
 #include <wx/utils.h>
-#include <wx/treectrl.h>
 #include <wx/sizer.h>
 
 #include <algorithm>
@@ -31,17 +30,6 @@ using repomancer::vcs::LogOptions;
 using repomancer::vcs::git::GitDriver;
 
 namespace {
-
-// wxTreeCtrl owns whatever is attached to an item, so the ref's full name
-// rides along in a wxTreeItemData rather than being looked up by label.
-class RefItemData : public wxTreeItemData {
-public:
-    explicit RefItemData(wxString full_name) : full_name_(std::move(full_name)) {}
-    const wxString& full_name() const { return full_name_; }
-
-private:
-    wxString full_name_;
-};
 
 enum {
     ID_ThemeSystem = wxID_HIGHEST + 1,
@@ -196,17 +184,15 @@ MainFrame::MainFrame()
     diff_ = new repomancer::gui::DiffView(diff_panel);
     titled(diff_panel, _("Diff"), diff_);
 
-    auto* refs_panel = new wxPanel(this);
-    refs_tree_ = new wxTreeCtrl(refs_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                wxTR_HAS_BUTTONS | wxTR_HIDE_ROOT | wxTR_NO_LINES |
-                                    wxTR_SINGLE | wxBORDER_NONE);
-    titled(refs_panel, _("Repository"), refs_tree_);
+    // The sidebar is itself a one-column, one-row table: its column header is
+    // the pane title, and the row's only cell carries the repository details.
+    repo_view_ = new repomancer::gui::RepoView(this);
 
     // GitX-style master/detail: history on top, and below it the commit's
     // metadata, the files it touched, and the patch for whichever is selected.
     aui_.SetManagedWindow(this);
     aui_.AddPane(log_view_, wxAuiPaneInfo().CenterPane().Name("log"));
-    aui_.AddPane(refs_panel, wxAuiPaneInfo()
+    aui_.AddPane(repo_view_, wxAuiPaneInfo()
                                  .Left()
                                  .Name("refs")
                                  .Caption(_("Repository"))
@@ -247,7 +233,6 @@ MainFrame::MainFrame()
     Bind(wxEVT_MENU, &MainFrame::OnAbout, this, wxID_ABOUT);
     log_view_->Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, &MainFrame::OnCommitSelected, this);
     files_->Bind(wxEVT_LIST_ITEM_SELECTED, &MainFrame::OnFileSelected, this);
-    refs_tree_->Bind(wxEVT_TREE_ITEM_ACTIVATED, &MainFrame::OnRefActivated, this);
     log_view_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
         event.Skip();
         FitColumns();
@@ -337,99 +322,89 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
     }
 }
 
-void MainFrame::PopulateRefs() {
-    refs_tree_->DeleteAllItems();
-    const wxTreeItemId root = refs_tree_->AddRoot("root");
+void MainFrame::PopulateRepoDetails() {
+    // Attacker-influenced strings (branch names, identities) are stripped of
+    // control characters before display, as everywhere else in the UI.
+    const auto clean = [](const std::string& raw) {
+        std::string text;
+        text.reserve(raw.size());
+        for (const char ch : raw) {
+            text.push_back(static_cast<unsigned char>(ch) < 0x20 ? ' ' : ch);
+        }
+        return wxString::FromUTF8(text);
+    };
+
+    wxString details;
+    const auto section = [&details](const wxString& title) {
+        if (!details.empty()) {
+            details += "\n";
+        }
+        details += title + "\n";
+    };
 
     const auto refs = GitDriver().refs(repo_path_);
-    if (!refs.ok()) {
-        return;
-    }
-
-    // One group per kind, created only when something belongs to it, so an
-    // empty repository does not show four empty folders.
-    struct Group {
-        repomancer::vcs::RefKind kind;
-        wxString label;
-        wxTreeItemId id;
-    };
-    Group groups[] = {
-        {repomancer::vcs::RefKind::LocalBranch, _("Branches"), {}},
-        {repomancer::vcs::RefKind::RemoteBranch, _("Remotes"), {}},
-        {repomancer::vcs::RefKind::Tag, _("Tags"), {}},
-        {repomancer::vcs::RefKind::Stash, _("Stashes"), {}},
-    };
-
-    for (const auto& ref : refs.value()) {
-        auto* group = std::find_if(std::begin(groups), std::end(groups),
-                                   [&](const Group& g) { return g.kind == ref.kind; });
-        if (group == std::end(groups)) {
-            continue; // notes, replace and friends have no place in the sidebar
+    if (refs.ok()) {
+        struct Group {
+            repomancer::vcs::RefKind kind;
+            wxString title;
+            wxString body;
+        };
+        Group groups[] = {
+            {repomancer::vcs::RefKind::LocalBranch, _("Branches"), {}},
+            {repomancer::vcs::RefKind::RemoteBranch, _("Remotes"), {}},
+            {repomancer::vcs::RefKind::Tag, _("Tags"), {}},
+            {repomancer::vcs::RefKind::Stash, _("Stashes"), {}},
+        };
+        for (const auto& ref : refs.value()) {
+            auto* group = std::find_if(std::begin(groups), std::end(groups),
+                                       [&](const Group& g) { return g.kind == ref.kind; });
+            if (group == std::end(groups)) {
+                continue;
+            }
+            group->body += "  " + clean(ref.short_name);
+            if (ref.is_head) {
+                group->body += " \u2713";
+            }
+            if (!ref.upstream.empty()) {
+                group->body += " \u2192 " + clean(ref.upstream);
+            }
+            group->body += "\n";
         }
-        if (!group->id.IsOk()) {
-            group->id = refs_tree_->AppendItem(root, group->label);
-        }
-        wxString label = wxString::FromUTF8(ref.short_name);
-        if (ref.is_head) {
-            label += " ✓";
-        }
-        if (!ref.upstream.empty()) {
-            label += " → " + wxString::FromUTF8(ref.upstream);
-        }
-        const wxTreeItemId item = refs_tree_->AppendItem(group->id, label);
-        // The full name is what a checkout or a log filter would need.
-        refs_tree_->SetItemData(item, new RefItemData(wxString::FromUTF8(ref.full_name)));
-        if (ref.is_head) {
-            refs_tree_->SetItemBold(item, true);
-        }
-    }
-    // Repository-level summaries, in the spirit of a project page: who has
-    // been committing, and what the tracked content is written in.
-    const auto people = GitDriver().contributors(repo_path_);
-    if (people.ok() && !people.value().empty()) {
-        const wxTreeItemId contributors = refs_tree_->AppendItem(root, _("Contributors"));
-        for (const auto& person : people.value()) {
-            wxString label = wxString::FromUTF8(person.name);
-            label += wxString::Format(wxPLURAL("  (%d commit)", "  (%d commits)", person.commits),
-                                      person.commits);
-            const wxTreeItemId item = refs_tree_->AppendItem(contributors, label);
-            if (!person.email.empty()) {
-                refs_tree_->SetItemData(item,
-                                        new RefItemData(wxString::FromUTF8(person.email)));
+        for (const auto& group : groups) {
+            if (!group.body.empty()) {
+                section(group.title);
+                details += group.body;
             }
         }
-        refs_tree_->Expand(contributors);
+    }
+
+    const auto people = GitDriver().contributors(repo_path_);
+    if (people.ok() && !people.value().empty()) {
+        section(_("Contributors"));
+        for (const auto& person : people.value()) {
+            details += "  " + clean(person.name) +
+                       wxString::Format(wxPLURAL(" (%d commit)", " (%d commits)",
+                                                 person.commits),
+                                        person.commits) +
+                       "\n";
+        }
     }
 
     const auto langs = GitDriver().languages(repo_path_);
     if (langs.ok() && !langs.value().empty()) {
-        const wxTreeItemId languages = refs_tree_->AppendItem(root, _("Languages"));
+        section(_("Languages"));
         for (const auto& language : langs.value()) {
-            // A share below a tenth of a percent would render as 0.0%.
             const wxString share = language.percent < 0.05
                                        ? wxString("<0.1%")
                                        : wxString::Format("%.1f%%", language.percent);
-            refs_tree_->AppendItem(languages,
-                                   wxString::FromUTF8(language.name) + "  " + share);
-        }
-        refs_tree_->Expand(languages);
-    }
-
-    for (const auto& group : groups) {
-        if (group.id.IsOk()) {
-            refs_tree_->Expand(group.id);
+            details += "  " + clean(language.name) + "  " + share + "\n";
         }
     }
-}
 
-void MainFrame::OnRefActivated(wxTreeEvent& event) {
-    const auto* data = dynamic_cast<RefItemData*>(refs_tree_->GetItemData(event.GetItem()));
-    if (data == nullptr) {
-        return; // a group header
+    if (details.empty()) {
+        details = _("No repository information");
     }
-    // Checking a ref out belongs to the write milestone; for now activating one
-    // just reports it.
-    SetStatusText(wxString::Format(_("Ref: %s"), data->full_name()));
+    repo_view_->SetDetails(details);
 }
 
 void MainFrame::RestartForTheme() {
@@ -470,40 +445,28 @@ void MainFrame::ApplyThemeToWidgets() {
     const wxColour list_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX);
     const wxColour list_fg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
     for (wxWindow* control : {static_cast<wxWindow*>(files_),
-                              static_cast<wxWindow*>(refs_tree_),
+                              static_cast<wxWindow*>(repo_view_),
                               static_cast<wxWindow*>(log_view_)}) {
         control->SetBackgroundColour(list_bg);
         control->SetForegroundColour(list_fg);
         control->Refresh();
     }
 
-    // A fresh art provider is the supported way to make wxAUI re-read the
-    // system palette; the existing one has no refresh entry point.
-    auto* art = new wxAuiDefaultDockArt;
-    aui_.SetArtProvider(art);
-
     // Panes are titled by their own header controls, so wxAUI's caption is
     // hidden; what remains to match is the surface it draws between and
     // behind them.
-    const wxColour header_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
-    const wxColour header_fg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
-    const wxFont header_font = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+    auto* art = new wxAuiDefaultDockArt;
+    aui_.SetArtProvider(art);
 
+    const wxColour header_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
     art->SetMetric(wxAUI_DOCKART_GRADIENT_TYPE, wxAUI_GRADIENT_NONE);
-    art->SetColour(wxAUI_DOCKART_ACTIVE_CAPTION_COLOUR, header_bg);
-    art->SetColour(wxAUI_DOCKART_INACTIVE_CAPTION_COLOUR, header_bg);
-    art->SetColour(wxAUI_DOCKART_ACTIVE_CAPTION_TEXT_COLOUR, header_fg);
-    art->SetColour(wxAUI_DOCKART_INACTIVE_CAPTION_TEXT_COLOUR, header_fg);
     art->SetColour(wxAUI_DOCKART_BORDER_COLOUR, header_bg);
     art->SetColour(wxAUI_DOCKART_SASH_COLOUR, header_bg);
     art->SetColour(wxAUI_DOCKART_BACKGROUND_COLOUR, header_bg);
-    art->SetFont(wxAUI_DOCKART_CAPTION_FONT, header_font);
     // No pane frame: wxAUI draws it as a dotted rectangle around every docked
     // pane, which reads as stray dashes now that the panes are titled by their
     // own headers. The sash between panes is separation enough.
     art->SetMetric(wxAUI_DOCKART_PANE_BORDER_SIZE, 0);
-
-
     aui_.Update();
 
     Refresh();
@@ -511,8 +474,6 @@ void MainFrame::ApplyThemeToWidgets() {
 
 void MainFrame::SetDetailsText(const wxString& text) {
     details_->SetReadOnly(false);
-    // A blank leading line is the only top inset Scintilla offers; padding it
-    // from outside would move the control itself off the pane edge.
     details_->SetText(text);
     details_->SetReadOnly(true);
 }
@@ -668,7 +629,7 @@ void MainFrame::LoadRepository(const wxString& path) {
             SetStatusText(wxString::Format(_("%zu commits — %s"), count,
                                            wxString::FromUTF8(path_utf8)));
 
-            PopulateRefs();
+            PopulateRepoDetails();
 
             // The log's column header is the reference the pane headers line
             // up with. Its height is not exposed, but the first row's position
