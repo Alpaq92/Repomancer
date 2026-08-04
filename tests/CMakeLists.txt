@@ -6,6 +6,7 @@ add_executable(repomancer-tests
   fixture_repo.cpp
   test_porcelain.cpp
   test_log_format.cpp
+  test_graph.cpp
   test_process_runner.cpp
   test_settings.cpp
   test_git_integration.cpp

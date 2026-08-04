@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <repomancer/vcs/graph.h>
 #include <repomancer/vcs/model.h>
 
 #include <wx/dataview.h>
@@ -14,7 +15,8 @@
 class CommitLogModel : public wxDataViewVirtualListModel {
 public:
     enum Column {
-        Col_Subject = 0,
+        Col_Graph = 0,
+        Col_Subject,
         Col_Author,
         Col_Date,
         Col_Hash,
@@ -25,11 +27,20 @@ public:
 
     void ReplaceAll(std::vector<repomancer::vcs::Commit> commits);
 
+    [[nodiscard]] const std::vector<repomancer::vcs::GraphRow>& graph_rows() const {
+        return graph_.rows;
+    }
+    [[nodiscard]] int max_lanes() const { return graph_.max_lanes; }
+    [[nodiscard]] const repomancer::vcs::Commit* commit_at(unsigned int row) const;
+
     unsigned int GetColumnCount() const override { return Col_Count; }
-    wxString GetColumnType(unsigned int) const override { return "string"; }
+    wxString GetColumnType(unsigned int col) const override {
+        return col == Col_Graph ? "long" : "string";
+    }
     void GetValueByRow(wxVariant& variant, unsigned int row, unsigned int col) const override;
     bool SetValueByRow(const wxVariant&, unsigned int, unsigned int) override { return false; }
 
 private:
     std::vector<repomancer::vcs::Commit> commits_;
+    repomancer::vcs::GraphLayout graph_;
 };

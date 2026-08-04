@@ -6,6 +6,7 @@ add_executable(repomancer WIN32 MACOSX_BUNDLE
   src/main.cpp
   src/main_frame.cpp
   src/log_model.cpp
+  src/graph_renderer.cpp
   src/theme.cpp
 )
 
