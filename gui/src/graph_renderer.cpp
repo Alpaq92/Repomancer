@@ -133,6 +133,17 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
     const double bottom = middle + half;
     const double dot_x = lane_x(row->lane);
 
+    // The overhang exists so a lane meets its continuation in the next row
+    // across whatever padding the port leaves around a cell. Above the first
+    // row and below the last there is no continuation, and painting there puts
+    // ink outside the rows — visible as a stray mark when the view is pulled
+    // past its end.
+    const bool first_row = row_index_ == 0;
+    const bool last_row = rows_ != nullptr &&
+                          static_cast<std::size_t>(row_index_) + 1 == rows_->size();
+    const double run_top = first_row ? top : 0.0;
+    const double run_bottom = last_row ? bottom : static_cast<double>(height);
+
     std::vector<Line> lines;
     std::vector<Curve> curves;
 
@@ -140,7 +151,7 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
         const double from_x = lane_x(segment.from);
         const double to_x = lane_x(segment.to);
         if (from_x == to_x) {
-            lines.push_back({from_x, 0, static_cast<double>(height), lane_colour(segment.color)});
+            lines.push_back({from_x, run_top, run_bottom, lane_colour(segment.color)});
         } else {
             curves.push_back({from_x, top, to_x, bottom, lane_colour(segment.color),
                               CurveKind::Crossing});
@@ -150,7 +161,7 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
         const double x = lane_x(edge.lane);
         if (x == dot_x) {
             // Stops at the dot: a lane that ends here must not sprout a stub.
-            lines.push_back({x, 0, middle, lane_colour(edge.color)});
+            lines.push_back({x, run_top, middle, lane_colour(edge.color)});
         } else {
             curves.push_back({x, top, dot_x, middle, lane_colour(edge.color),
                               CurveKind::IntoDot});
@@ -159,7 +170,7 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
     for (const auto& edge : row->parents_out) {
         const double x = lane_x(edge.lane);
         if (x == dot_x) {
-            lines.push_back({x, middle, static_cast<double>(height), lane_colour(edge.color)});
+            lines.push_back({x, middle, run_bottom, lane_colour(edge.color)});
         } else {
             curves.push_back({dot_x, middle, x, bottom, lane_colour(edge.color),
                               CurveKind::FromDot});
