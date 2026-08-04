@@ -44,21 +44,37 @@ public:
             width = wxMax(width, extent.GetWidth());
             height += extent.GetHeight() + kLeading;
         }
-        return wxSize(width + 2 * kPadding, height + kPadding);
+        return wxSize(width + 2 * (kMargin + kPadding),
+                      height + kPadding + 2 * kMargin);
     }
 
     bool Render(wxRect cell, wxDC* dc, int state) override {
         const wxFont base = dc->GetFont();
         const bool selected = (state & wxDATAVIEW_CELL_SELECTED) != 0;
-        dc->SetTextForeground(wxSystemSettings::GetColour(
-            selected ? wxSYS_COLOUR_HIGHLIGHTTEXT : wxSYS_COLOUR_WINDOWTEXT));
+        const wxColour fg = wxSystemSettings::GetColour(
+            selected ? wxSYS_COLOUR_HIGHLIGHTTEXT : wxSYS_COLOUR_WINDOWTEXT);
+        const wxColour bg = wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX);
 
-        int y = cell.GetTop() + kPadding;
+        // The cell's outline, inset by a margin so it reads as a table cell
+        // rather than as text floating under the header. The line colour is a
+        // blend of the theme's own text and background, so it stays a subtle
+        // hairline in both light and dark.
+        const auto blend = [](int a, int b) { return (a * 30 + b * 70) / 100; };
+        const wxColour border(blend(fg.Red(), bg.Red()), blend(fg.Green(), bg.Green()),
+                              blend(fg.Blue(), bg.Blue()));
+        wxRect box = cell;
+        box.Deflate(kMargin, kMargin);
+        dc->SetPen(wxPen(border, 1));
+        dc->SetBrush(*wxTRANSPARENT_BRUSH);
+        dc->DrawRectangle(box);
+
+        dc->SetTextForeground(fg);
+        int y = box.GetTop() + kPadding;
         for (const auto& line : lines_) {
             // A heading is any line that is not indented under one.
             const bool heading = !line.empty() && line[0] != ' ';
             dc->SetFont(heading ? base.Bold() : base);
-            dc->DrawText(line, cell.GetLeft() + kPadding, y);
+            dc->DrawText(line, box.GetLeft() + kPadding, y);
             y += dc->GetTextExtent(line.empty() ? " " : line).GetHeight() + kLeading;
         }
         dc->SetFont(base);
@@ -66,7 +82,8 @@ public:
     }
 
 private:
-    static constexpr int kPadding = 8;
+    static constexpr int kMargin = 6;  // cell edge to outline
+    static constexpr int kPadding = 8; // outline to text
     static constexpr int kLeading = 3;
 
     std::vector<wxString> lines_;
