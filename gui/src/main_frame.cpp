@@ -13,6 +13,7 @@
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
+#include <wx/treectrl.h>
 #include <wx/sizer.h>
 
 #include <algorithm>
@@ -25,12 +26,22 @@ using repomancer::vcs::LogOptions;
 using repomancer::vcs::git::GitDriver;
 
 namespace {
+
+// wxTreeCtrl owns whatever is attached to an item, so the ref's full name
+// rides along in a wxTreeItemData rather than being looked up by label.
+class RefItemData : public wxTreeItemData {
+public:
+    explicit RefItemData(wxString full_name) : full_name_(std::move(full_name)) {}
+    const wxString& full_name() const { return full_name_; }
+
+private:
+    wxString full_name_;
+};
+
 enum {
     ID_ThemeSystem = wxID_HIGHEST + 1,
     ID_ThemeLight,
     ID_ThemeDark,
-    ID_StyleAngular,
-    ID_StyleRounded,
 };
 } // namespace
 
@@ -46,13 +57,8 @@ MainFrame::MainFrame()
     theme_menu->AppendRadioItem(ID_ThemeSystem, _("&System"));
     theme_menu->AppendRadioItem(ID_ThemeLight, _("&Light"));
     theme_menu->AppendRadioItem(ID_ThemeDark, _("&Dark"));
-    auto* style_menu = new wxMenu;
-    style_menu->AppendRadioItem(ID_StyleAngular, _("&Angular"));
-    style_menu->AppendRadioItem(ID_StyleRounded, _("&Rounded"));
-
     auto* view_menu = new wxMenu;
     view_menu->AppendSubMenu(theme_menu, _("&Theme"));
-    view_menu->AppendSubMenu(style_menu, _("&Graph style"));
 
     auto* help_menu = new wxMenu;
     help_menu->Append(wxID_ABOUT);
@@ -64,11 +70,6 @@ MainFrame::MainFrame()
     SetMenuBar(menu_bar);
 
     const auto startup_settings = repomancer::load_settings();
-    const auto startup_style =
-        repomancer::gui::graph_style_from_string(startup_settings.graph_style);
-    style_menu->Check(startup_style == repomancer::gui::GraphStyle::Rounded ? ID_StyleRounded
-                                                                           : ID_StyleAngular,
-                      true);
 
     switch (repomancer::gui::theme_mode_from_string(startup_settings.theme)) {
     case ThemeMode::Light:
@@ -94,7 +95,6 @@ MainFrame::MainFrame()
     log_view_->SetRowHeight(repomancer::gui::GraphRenderer::kRowHeight);
 
     graph_renderer_ = new repomancer::gui::GraphRenderer(&model_->graph_rows());
-    graph_renderer_->SetStyle(startup_style);
     graph_column_ = new wxDataViewColumn(_("Graph"), graph_renderer_, CommitLogModel::Col_Graph,
                                          60, wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE);
     log_view_->AppendColumn(graph_column_);
@@ -140,10 +140,21 @@ MainFrame::MainFrame()
 
     diff_ = new repomancer::gui::DiffView(this);
 
+    refs_tree_ = new wxTreeCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                wxTR_HAS_BUTTONS | wxTR_HIDE_ROOT | wxTR_NO_LINES |
+                                    wxTR_SINGLE | wxBORDER_NONE);
+
     // GitX-style master/detail: history on top, and below it the commit's
     // metadata, the files it touched, and the patch for whichever is selected.
     aui_.SetManagedWindow(this);
     aui_.AddPane(log_view_, wxAuiPaneInfo().CenterPane().Name("log"));
+    aui_.AddPane(refs_tree_, wxAuiPaneInfo()
+                                 .Left()
+                                 .Name("refs")
+                                 .Caption(_("Repository"))
+                                 .BestSize(230, -1)
+                                 .MinSize(160, -1)
+                                 .CloseButton(false));
     aui_.AddPane(details_panel, wxAuiPaneInfo()
                                .Bottom()
                                .Name("details")
@@ -168,11 +179,11 @@ MainFrame::MainFrame()
 
     Bind(wxEVT_MENU, &MainFrame::OnOpenRepository, this, wxID_OPEN);
     Bind(wxEVT_MENU, &MainFrame::OnThemeSelected, this, ID_ThemeSystem, ID_ThemeDark);
-    Bind(wxEVT_MENU, &MainFrame::OnGraphStyleSelected, this, ID_StyleAngular, ID_StyleRounded);
     Bind(wxEVT_MENU, &MainFrame::OnQuit, this, wxID_EXIT);
     Bind(wxEVT_MENU, &MainFrame::OnAbout, this, wxID_ABOUT);
     log_view_->Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, &MainFrame::OnCommitSelected, this);
     files_->Bind(wxEVT_LIST_ITEM_SELECTED, &MainFrame::OnFileSelected, this);
+    refs_tree_->Bind(wxEVT_TREE_ITEM_ACTIVATED, &MainFrame::OnRefActivated, this);
     log_view_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
         event.Skip();
         FitColumns();
@@ -261,6 +272,69 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
     }
 }
 
+void MainFrame::PopulateRefs() {
+    refs_tree_->DeleteAllItems();
+    const wxTreeItemId root = refs_tree_->AddRoot("root");
+
+    const auto refs = GitDriver().refs(repo_path_);
+    if (!refs.ok()) {
+        return;
+    }
+
+    // One group per kind, created only when something belongs to it, so an
+    // empty repository does not show four empty folders.
+    struct Group {
+        repomancer::vcs::RefKind kind;
+        wxString label;
+        wxTreeItemId id;
+    };
+    Group groups[] = {
+        {repomancer::vcs::RefKind::LocalBranch, _("Branches"), {}},
+        {repomancer::vcs::RefKind::RemoteBranch, _("Remotes"), {}},
+        {repomancer::vcs::RefKind::Tag, _("Tags"), {}},
+        {repomancer::vcs::RefKind::Stash, _("Stashes"), {}},
+    };
+
+    for (const auto& ref : refs.value()) {
+        auto* group = std::find_if(std::begin(groups), std::end(groups),
+                                   [&](const Group& g) { return g.kind == ref.kind; });
+        if (group == std::end(groups)) {
+            continue; // notes, replace and friends have no place in the sidebar
+        }
+        if (!group->id.IsOk()) {
+            group->id = refs_tree_->AppendItem(root, group->label);
+        }
+        wxString label = wxString::FromUTF8(ref.short_name);
+        if (ref.is_head) {
+            label += " ✓";
+        }
+        if (!ref.upstream.empty()) {
+            label += " → " + wxString::FromUTF8(ref.upstream);
+        }
+        const wxTreeItemId item = refs_tree_->AppendItem(group->id, label);
+        // The full name is what a checkout or a log filter would need.
+        refs_tree_->SetItemData(item, new RefItemData(wxString::FromUTF8(ref.full_name)));
+        if (ref.is_head) {
+            refs_tree_->SetItemBold(item, true);
+        }
+    }
+    for (const auto& group : groups) {
+        if (group.id.IsOk()) {
+            refs_tree_->Expand(group.id);
+        }
+    }
+}
+
+void MainFrame::OnRefActivated(wxTreeEvent& event) {
+    const auto* data = dynamic_cast<RefItemData*>(refs_tree_->GetItemData(event.GetItem()));
+    if (data == nullptr) {
+        return; // a group header
+    }
+    // Checking a ref out belongs to the write milestone; for now activating one
+    // just reports it.
+    SetStatusText(wxString::Format(_("Ref: %s"), data->full_name()));
+}
+
 void MainFrame::OnFileSelected(wxListEvent& event) { ShowFileDiff(event.GetIndex()); }
 
 void MainFrame::ShowFileDiff(long index) {
@@ -280,17 +354,6 @@ void MainFrame::ShowFileDiff(long index) {
         return;
     }
     diff_->ShowDiff(diff.value());
-}
-
-void MainFrame::OnGraphStyleSelected(wxCommandEvent& event) {
-    const auto style = event.GetId() == ID_StyleRounded ? repomancer::gui::GraphStyle::Rounded
-                                                        : repomancer::gui::GraphStyle::Angular;
-    graph_renderer_->SetStyle(style);
-    log_view_->Refresh();
-
-    auto settings = repomancer::load_settings();
-    settings.graph_style = repomancer::gui::graph_style_to_string(style);
-    repomancer::save_settings(settings);
 }
 
 void MainFrame::OnThemeSelected(wxCommandEvent& event) {
@@ -385,6 +448,8 @@ void MainFrame::LoadRepository(const wxString& path) {
 
             SetStatusText(wxString::Format(_("%zu commits — %s"), count,
                                            wxString::FromUTF8(path_utf8)));
+
+            PopulateRefs();
 
             // Land on the newest commit so the detail panes have content.
             if (count > 0) {

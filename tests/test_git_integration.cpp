@@ -169,3 +169,30 @@ TEST_CASE("git integration: changed files and patches", "[integration]") {
         CHECK(diff.value().empty());
     }
 }
+
+TEST_CASE("git integration: refs parse against real for-each-ref output", "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+
+    // The parser is fed git's real record framing here — a unit fixture that
+    // guessed the framing wrongly still passed while the sidebar came up
+    // empty.
+    const auto result = driver.refs(repo.path());
+    REQUIRE(result.ok());
+    const auto& refs = result.value();
+    REQUIRE_FALSE(refs.empty());
+
+    const auto find = [&](const std::string& short_name) {
+        return std::find_if(refs.begin(), refs.end(), [&](const Ref& r) {
+            return r.short_name == short_name && r.kind == RefKind::LocalBranch;
+        });
+    };
+    REQUIRE(find("main") != refs.end());
+    REQUIRE(find("feature") != refs.end());
+    CHECK(find("main")->is_head);
+    CHECK_FALSE(find("feature")->is_head);
+    CHECK(find("main")->target.size() == 40);
+}

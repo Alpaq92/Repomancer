@@ -29,6 +29,17 @@ const wxColour kHunkFg(0x18, 0x64, 0xAB);    // blue-9
 const wxColour kHunkBg(0xE7, 0xF5, 0xFF);    // blue-0
 const wxColour kMetaFg(0x86, 0x8E, 0x96);    // gray-6
 
+// Dark equivalents: the light tints above would glare, so these are the
+// accent hues dropped to roughly the background's luminance — enough to read
+// a block of additions at a glance without lighting up the pane.
+const wxColour kAddedFgDark(0x8C, 0xE9, 0x9A);   // green-3
+const wxColour kAddedBgDark(0x1A, 0x2E, 0x20);
+const wxColour kRemovedFgDark(0xFF, 0xA8, 0xA8); // red-3
+const wxColour kRemovedBgDark(0x38, 0x20, 0x20);
+const wxColour kHunkFgDark(0x74, 0xC0, 0xFC);    // blue-3
+const wxColour kHunkBgDark(0x1E, 0x29, 0x3B);
+const wxColour kMetaFgDark(0xAD, 0xB5, 0xBD);    // gray-5
+
 bool is_dark(const wxColour& background) {
     // Rec. 601 luma; good enough to pick a legible pairing.
     return (background.Red() * 299 + background.Green() * 587 + background.Blue() * 114) / 1000 <
@@ -66,17 +77,18 @@ void DiffView::ApplyTheme() {
     StyleSetBackground(wxSTC_STYLE_DEFAULT, window_bg);
     StyleClearAll(); // propagate the default before setting the specific ones
 
-    // On a dark background the pale tints would wash out, so there the colour
-    // carries the meaning and the background stays as it is.
-    StyleSetForeground(Style_Added, dark ? wxColour(0x8C, 0xE9, 0x9A) : kAddedFg);
-    StyleSetBackground(Style_Added, dark ? window_bg : kAddedBg);
-    StyleSetForeground(Style_Removed, dark ? wxColour(0xFF, 0xA8, 0xA8) : kRemovedFg);
-    StyleSetBackground(Style_Removed, dark ? window_bg : kRemovedBg);
-    StyleSetForeground(Style_HunkHeader, dark ? wxColour(0x74, 0xC0, 0xFC) : kHunkFg);
-    StyleSetBackground(Style_HunkHeader, dark ? window_bg : kHunkBg);
+    // Both themes tint the line background: on dark the tint is dim rather
+    // than absent, so a block of additions still reads as a block instead of
+    // relying on the text colour alone.
+    StyleSetForeground(Style_Added, dark ? kAddedFgDark : kAddedFg);
+    StyleSetBackground(Style_Added, dark ? kAddedBgDark : kAddedBg);
+    StyleSetForeground(Style_Removed, dark ? kRemovedFgDark : kRemovedFg);
+    StyleSetBackground(Style_Removed, dark ? kRemovedBgDark : kRemovedBg);
+    StyleSetForeground(Style_HunkHeader, dark ? kHunkFgDark : kHunkFg);
+    StyleSetBackground(Style_HunkHeader, dark ? kHunkBgDark : kHunkBg);
     StyleSetForeground(Style_FileHeader, window_fg);
     StyleSetBold(Style_FileHeader, true);
-    StyleSetForeground(Style_Meta, kMetaFg);
+    StyleSetForeground(Style_Meta, dark ? kMetaFgDark : kMetaFg);
     Refresh();
 }
 

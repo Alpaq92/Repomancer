@@ -71,12 +71,6 @@ Settings load_settings(const std::filesystem::path& config_dir) {
             settings.theme = value;
         }
     }
-    if (const auto it = json.find("graph_style"); it != json.end() && it->is_string()) {
-        const auto value = it->get<std::string>();
-        if (value == "angular" || value == "rounded") {
-            settings.graph_style = value;
-        }
-    }
     return settings;
 }
 
@@ -89,7 +83,6 @@ bool save_settings(const Settings& settings, const std::filesystem::path& config
 
     const nlohmann::json json = {
         {"theme", settings.theme},
-        {"graph_style", settings.graph_style},
     };
 
     const auto file = config_dir / kFileName;

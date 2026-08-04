@@ -10,6 +10,7 @@
 
 #include <repomancer/process/process_runner.h>
 #include <repomancer/vcs/diff.h>
+#include <repomancer/vcs/refs.h>
 #include <repomancer/vcs/provider.h>
 
 #include <chrono>
@@ -45,6 +46,9 @@ public:
 
     [[nodiscard]] VcsResult<std::vector<Commit>>
     log(const std::filesystem::path& repo, const LogOptions& options) const override;
+
+    // Every branch, remote branch, tag and the stash, for the sidebar.
+    [[nodiscard]] VcsResult<std::vector<Ref>> refs(const std::filesystem::path& repo) const;
 
     // Files a commit touched. Merges are diffed against their first parent —
     // git shows nothing for them otherwise — and the root commit against the

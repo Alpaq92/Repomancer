@@ -57,14 +57,6 @@ std::vector<wxPoint> flatten_cubic(double x0, double y0, double x1, double y1, d
 
 } // namespace
 
-GraphStyle graph_style_from_string(std::string_view value) {
-    return value == "rounded" ? GraphStyle::Rounded : GraphStyle::Angular;
-}
-
-const char* graph_style_to_string(GraphStyle style) {
-    return style == GraphStyle::Rounded ? "rounded" : "angular";
-}
-
 wxColour lane_colour(int index) {
     // Open Color (https://yeun.github.io/open-color/, MIT) shade 6 — the step
     // designed to stay legible against both light and dark backgrounds. The
@@ -190,14 +182,6 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int /*state*/) {
 
     for (const auto& curve : curves) {
         dc->SetPen(graph_pen(curve.colour));
-        if (style_ == GraphStyle::Angular) {
-            // Git Extensions / git-graph: the line runs straight from where it
-            // leaves to where it arrives. Round caps take the hard edge off the
-            // corner it forms with the run in the neighbouring row.
-            dc->DrawLine(curve.x1, curve.y1, curve.x2, curve.y2);
-            continue;
-        }
-
         const double dx = curve.x2 - curve.x1;
         const double dy = curve.y2 - curve.y1;
         // A control point placed straight below its anchor holds the tangent

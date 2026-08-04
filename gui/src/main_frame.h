@@ -11,6 +11,7 @@
 #include <wx/dataview.h>
 #include <wx/frame.h>
 #include <wx/listctrl.h>
+#include <wx/treectrl.h>
 #include <wx/textctrl.h>
 
 #include <atomic>
@@ -30,20 +31,22 @@ public:
 private:
     void OnOpenRepository(wxCommandEvent& event);
     void OnThemeSelected(wxCommandEvent& event);
-    void OnGraphStyleSelected(wxCommandEvent& event);
     void OnQuit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);
     void OnCommitSelected(wxDataViewEvent& event);
     void OnFileSelected(wxListEvent& event);
+    void OnRefActivated(wxTreeEvent& event);
 
     void LoadRepository(const wxString& path);
     void ShowFileDiff(long index);
+    void PopulateRefs();
     // Sizes every column to its content and lets Subject absorb the rest.
     void FitColumns();
 
     wxAuiManager aui_;
     wxDataViewCtrl* log_view_ = nullptr;
     wxTextCtrl* details_ = nullptr;
+    wxTreeCtrl* refs_tree_ = nullptr;
     wxListCtrl* files_ = nullptr;
     repomancer::gui::DiffView* diff_ = nullptr;
     wxObjectDataPtr<CommitLogModel> model_;

@@ -115,6 +115,16 @@ VcsResult<StatusSnapshot> GitDriver::status(const std::filesystem::path& repo) c
     return parse_status_porcelain_v2z(run.out, config_.limits);
 }
 
+VcsResult<std::vector<Ref>> GitDriver::refs(const std::filesystem::path& repo) const {
+    const auto run = proc::ProcessRunner::run(make_spec(
+        &repo, {"for-each-ref", "--sort=refname",
+                "--format=%(refname)%00%(objectname)%00%(HEAD)%00%(upstream:short)%00%(objecttype)"}));
+    if (!run.ok()) {
+        return from_run_failure(run);
+    }
+    return parse_for_each_ref_z(run.out, config_.limits);
+}
+
 VcsResult<std::vector<ChangedFile>>
 GitDriver::changed_files(const std::filesystem::path& repo, const std::string& commit) const {
     const auto run = proc::ProcessRunner::run(
