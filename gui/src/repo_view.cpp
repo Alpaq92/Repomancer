@@ -79,10 +79,9 @@ RepoView::RepoView(wxWindow* parent)
     : wxDataViewListCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                          // Variable line height: the row is as tall as its
                          // block of lines, instead of clipping to one line.
-                         // The border outlines the whole table, header and
-                         // cell together; the margin around the widget is what
-                         // makes it visible against the pane.
-                         wxDV_VARIABLE_LINE_HEIGHT | wxBORDER_SIMPLE) {
+                         // No native frame: the pane draws the outline itself,
+                         // the same hairline every table gets.
+                         wxDV_VARIABLE_LINE_HEIGHT | wxBORDER_NONE) {
     column_ = new wxDataViewColumn(_("Repository"), new DetailsRenderer(), 0,
                                    wxCOL_WIDTH_AUTOSIZE, wxALIGN_LEFT, 0);
     AppendColumn(column_, "string");

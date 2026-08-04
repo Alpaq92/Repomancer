@@ -3,6 +3,8 @@
 
 #include "main_frame.h"
 
+#include <wx/dcclient.h>
+
 #include "pane_header.h"
 #include "theme.h"
 
@@ -149,8 +151,13 @@ MainFrame::MainFrame()
     // SetMargins for multiline text on GTK, so its first character sits hard
     // against the frame. Read-only and unlexed, it is just a text pane with a
     // margin that works.
-    auto* details_panel = new wxPanel(this);
-    details_ = new wxStyledTextCtrl(details_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    // Like the sidebar, the pane holds one bordered table — header and text
+    // as a unit — inset so the outline is visible against the pane.
+    details_panel_ = new wxPanel(this);
+    details_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    auto* details_table = new wxPanel(details_panel_, wxID_ANY, wxDefaultPosition,
+                                      wxDefaultSize, wxBORDER_NONE);
+    details_ = new wxStyledTextCtrl(details_table, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                     wxBORDER_NONE);
     details_->SetReadOnly(true);
     details_->SetLexer(wxSTC_LEX_NULL);
@@ -168,7 +175,12 @@ MainFrame::MainFrame()
     details_->SetExtraDescent(1);
     details_->StyleSetFont(wxSTC_STYLE_DEFAULT,
                            wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
-    titled(details_panel, _("Commit details"), details_);
+    titled(details_table, _("Commit details"), details_);
+    {
+        auto* outer = new wxBoxSizer(wxVERTICAL);
+        outer->Add(details_table, 1, wxEXPAND | wxALL, 8);
+        details_panel_->SetSizer(outer);
+    }
 
     auto* files_panel = new wxPanel(this);
     files_ = new wxListCtrl(files_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
@@ -196,6 +208,31 @@ MainFrame::MainFrame()
         repo_panel_->SetSizer(sizer);
     }
 
+    // Each inset table is outlined by its pane, not by a native frame: GTK
+    // frames a panel and a tree view in different greys, so the only way two
+    // outlines match exactly — in either theme — is to draw both ourselves.
+    const auto outlined = [](wxPanel* pane, wxWindow* table) {
+        pane->Bind(wxEVT_PAINT, [pane, table](wxPaintEvent&) {
+            wxPaintDC dc(pane);
+            const wxColour fg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+            const wxColour bg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+            const auto blend = [](int a, int b) { return (a * 30 + b * 70) / 100; };
+            dc.SetPen(wxPen(wxColour(blend(fg.Red(), bg.Red()), blend(fg.Green(), bg.Green()),
+                                     blend(fg.Blue(), bg.Blue())),
+                            1));
+            dc.SetBrush(*wxTRANSPARENT_BRUSH);
+            wxRect box = table->GetRect();
+            box.Inflate(1, 1);
+            dc.DrawRectangle(box);
+        });
+        pane->Bind(wxEVT_SIZE, [pane](wxSizeEvent& event) {
+            event.Skip();
+            pane->Refresh();
+        });
+    };
+    outlined(repo_panel_, repo_view_);
+    outlined(details_panel_, details_table);
+
     // GitX-style master/detail: history on top, and below it the commit's
     // metadata, the files it touched, and the patch for whichever is selected.
     aui_.SetManagedWindow(this);
@@ -208,7 +245,7 @@ MainFrame::MainFrame()
                                  .MinSize(160, -1)
                                  .CloseButton(false)
                                  .CaptionVisible(false));
-    aui_.AddPane(details_panel, wxAuiPaneInfo()
+    aui_.AddPane(details_panel_, wxAuiPaneInfo()
                                .Bottom()
                                .Name("details")
                                .Caption(_("Commit details"))
@@ -453,6 +490,7 @@ void MainFrame::ApplyThemeToWidgets() {
     const wxColour list_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX);
     const wxColour list_fg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
     repo_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    details_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
     for (wxWindow* control : {static_cast<wxWindow*>(files_),
                               static_cast<wxWindow*>(repo_view_),
                               static_cast<wxWindow*>(log_view_)}) {
