@@ -37,8 +37,10 @@ std::vector<wxString> split_lines(const wxString& text) {
 // summary.
 class DetailsRenderer : public wxDataViewCustomRenderer {
 public:
-    DetailsRenderer()
-        : wxDataViewCustomRenderer("string", wxDATAVIEW_CELL_INERT, wxALIGN_LEFT) {}
+    // `selected_line` belongs to the owning view; the renderer only reads it.
+    explicit DetailsRenderer(const int* selected_line)
+        : wxDataViewCustomRenderer("string", wxDATAVIEW_CELL_INERT, wxALIGN_LEFT),
+          selected_line_(selected_line) {}
 
     bool SetValue(const wxVariant& value) override {
         lines_ = split_lines(value.GetString());
@@ -66,12 +68,27 @@ public:
 
         dc->SetTextForeground(fg);
         int y = cell.GetTop() + kPadding;
-        for (const auto& line : lines_) {
+        for (std::size_t i = 0; i < lines_.size(); ++i) {
+            const wxString& line = lines_[i];
             // A heading is any line that is not indented under one.
             const bool heading = !line.empty() && line[0] != ' ';
             dc->SetFont(heading ? base.Bold() : base);
+            const int height = dc->GetTextExtent(line.empty() ? " " : line).GetHeight();
+            const bool highlit =
+                selected_line_ != nullptr && static_cast<int>(i) == *selected_line_;
+            if (highlit) {
+                dc->SetPen(*wxTRANSPARENT_PEN);
+                dc->SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
+                dc->DrawRectangle(cell.GetLeft() + 2, y - 1, cell.GetWidth() - 4,
+                                  height + kLeading);
+                dc->SetTextForeground(
+                    wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
+            }
             dc->DrawText(line, cell.GetLeft() + kPadding, y);
-            y += dc->GetTextExtent(line.empty() ? " " : line).GetHeight() + kLeading;
+            if (highlit) {
+                dc->SetTextForeground(fg);
+            }
+            y += height + kLeading;
         }
         dc->SetFont(base);
         return true;
@@ -79,6 +96,7 @@ public:
 
 private:
     std::vector<wxString> lines_;
+    const int* selected_line_;
 };
 
 } // namespace
@@ -90,7 +108,7 @@ RepoView::RepoView(wxWindow* parent)
                          // No native frame: the pane draws the outline itself,
                          // the same hairline every table gets.
                          wxDV_VARIABLE_LINE_HEIGHT | wxBORDER_NONE) {
-    column_ = new wxDataViewColumn(_("Repository"), new DetailsRenderer(), 0,
+    column_ = new wxDataViewColumn(_("Repository"), new DetailsRenderer(&selected_line_), 0,
                                    wxCOL_WIDTH_AUTOSIZE, wxALIGN_LEFT, 0);
     AppendColumn(column_, "string");
     // One column spanning the pane, exactly like the other pane headers.
@@ -105,16 +123,28 @@ RepoView::RepoView(wxWindow* parent)
     // click's position is what carries the intent. A click on a line that
     // names a ref activates that ref, and the selection is dropped again so
     // the block does not light up as one big selected cell.
+    Bind(wxEVT_LEFT_DOWN, [](wxMouseEvent& event) {
+        event.Skip();
+        fprintf(stderr, "[down] wx mouse event at (%d,%d)\n", event.GetX(), event.GetY());
+    });
     Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, [this](wxDataViewEvent& event) {
         event.Skip();
         if (event.GetItem().IsOk()) {
             const int line = LineAt(ScreenToClient(wxGetMousePosition()));
             if (line >= 0 && line < static_cast<int>(targets_.size()) &&
-                !targets_[line].empty() && on_activate_) {
-                on_activate_(targets_[line]);
+                !targets_[line].empty()) {
+                // The click landed on an item: mark it like a list selection
+                // and act on it.
+                selected_line_ = line;
+                if (on_activate_) {
+                    on_activate_(targets_[line]);
+                }
             }
         }
-        CallAfter([this] { UnselectAll(); });
+        CallAfter([this] {
+            UnselectAll();
+            Refresh();
+        });
     });
 }
 
@@ -147,6 +177,7 @@ int RepoView::LineAt(const wxPoint& point) {
 void RepoView::SetDetails(const wxString& details, std::vector<Target> targets) {
     lines_ = split_lines(details);
     targets_ = std::move(targets);
+    selected_line_ = -1;
     DeleteAllItems();
     wxVector<wxVariant> row;
     row.push_back(wxVariant(details));

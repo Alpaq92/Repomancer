@@ -41,6 +41,9 @@ private:
     [[nodiscard]] int LineAt(const wxPoint& point);
 
     wxDataViewColumn* column_ = nullptr;
+    // The line the user last clicked, highlighted like a list selection so a
+    // click on an item visibly lands on that item.
+    int selected_line_ = -1;
     std::vector<wxString> lines_;
     std::vector<Target> targets_;
     std::function<void(const Target&)> on_activate_;
