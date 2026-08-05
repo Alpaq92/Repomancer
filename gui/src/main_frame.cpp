@@ -29,6 +29,7 @@
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/stdpaths.h>
+#include <wx/textdlg.h>
 #include <wx/utils.h>
 
 #include <algorithm>

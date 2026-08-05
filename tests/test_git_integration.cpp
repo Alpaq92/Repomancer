@@ -865,7 +865,7 @@ TEST_CASE("git integration: without overrides a filter WOULD run (guard is real)
     // Trusted config (no extra_neutralize): the clean filter fires on diff —
     // proving the neutralization above is load-bearing, not a no-op.
     repomancer::vcs::git::GitConfig trusted;
-    GitDriver(trusted).worktree_diff(repo.path(), "a.txt");
+    (void)GitDriver(trusted).worktree_diff(repo.path(), "a.txt");
     std::error_code ec;
     CHECK(std::filesystem::exists(flt, ec));
 }

@@ -16,6 +16,12 @@ add_library(repomancer-core STATIC
 )
 add_library(repomancer::core ALIAS repomancer-core)
 
+# std::getenv (HOME/APPDATA lookup in settings.cpp) is safe here; MSVC's /sdl
+# otherwise promotes its C4996 deprecation to a hard error.
+if(MSVC)
+  target_compile_definitions(repomancer-core PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
 target_include_directories(repomancer-core
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 

@@ -12,8 +12,6 @@
 
 #include <wxbf/drop_shadow_frame_msw.h>
 
-#include <wx/msw/private/winstyle.h>
-
 bool wxDropShadowFrameMSW::Create(wxWindow* parent,
     wxWindowID id, wxDropShadowWindowPart part, const wxPoint& pos,
     const wxSize& size, long style, const wxString& name)
@@ -22,8 +20,11 @@ bool wxDropShadowFrameMSW::Create(wxWindow* parent,
         return false;
     }
 
-    wxMSWWinExStyleUpdater updateExStyle(GetHWND());
-    updateExStyle.TurnOn(WS_EX_LAYERED).Apply();
+    // Direct Win32, matching the ::SetWindowLongPtr calls below: avoids a
+    // dependency on wx/msw/private/winstyle.h, an internal wx header that
+    // vcpkg's wxWidgets does not package.
+    const LONG_PTR exStyle = ::GetWindowLongPtr(GetHWND(), GWL_EXSTYLE);
+    ::SetWindowLongPtr(GetHWND(), GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
     return true;
 }
 
