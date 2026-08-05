@@ -1,56 +1,63 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Repomancer contributors
 //
-// The sidebar: a table with one column and one row. The column header is the
-// pane's title — drawn by the same widget that titles every other pane — and
-// the single cell holds the repository's details as a block of lines.
+// The sidebar: the same header strip every pane gets, over a scrolled canvas
+// that draws the repository's details as a block of rows. The content is not
+// a tree view: its rows have varying heights, and GTK's tree view never
+// scrolls variable-height rows reliably — the scroll range and the painted
+// rows drift apart, leaving gaps and scrolling past the content. A plain
+// scrolled window owns its geometry exactly.
 
 #pragma once
 
-#include <wx/dataview.h>
+#include <wx/colour.h>
+#include <wx/panel.h>
 
 #include <functional>
+#include <utility>
 #include <vector>
 
 namespace repomancer::gui {
 
-class RepoView : public wxDataViewListCtrl {
+class PaneHeader;
+class DetailsCanvas;
+
+class RepoView : public wxPanel {
 public:
-    // What a line in the details block points at: the object it names, and
-    // the name itself for when that object is not in the log — an annotated
-    // tag's id is the tag object, not the commit it marks.
+    // What a row points at: the object it names, and the name itself for when
+    // that object is not in the log — an annotated tag's id is the tag
+    // object, not the commit it marks.
     struct Target {
         wxString hash;
         wxString name;
         [[nodiscard]] bool empty() const { return hash.empty() && name.empty(); }
     };
 
+    // One row of the details block. A row is plain text, a heading, a legend
+    // entry with a colour dot, or — when `bar` is non-empty — a stacked
+    // proportion bar in the GitHub style.
+    struct Row {
+        wxString text;
+        Target target;
+        bool heading = false;
+        bool dot = false;
+        wxColour colour;
+        std::vector<std::pair<wxColour, double>> bar; // colour and percent
+    };
+
     explicit RepoView(wxWindow* parent);
 
-    // Replaces the cell's contents. Lines without a leading space are drawn
-    // as section headings. `targets` pairs with the lines of `details`; a
-    // click on a line whose entry is non-empty activates it.
-    void SetDetails(const wxString& details, std::vector<Target> targets = {});
+    // Replaces the content rows.
+    void SetRows(std::vector<Row> rows);
 
-    void SetOnActivate(std::function<void(const Target&)> handler) {
-        on_activate_ = std::move(handler);
-    }
+    void SetOnActivate(std::function<void(const Target&)> handler);
 
-    // A press at `point` (client coordinates): highlights the item under it
-    // and activates its target, if any.
-    void OnItemPress(const wxPoint& point);
+    // The scrolled content, for theme colours.
+    [[nodiscard]] wxWindow* canvas() const;
 
 private:
-    // The line under `point`, in the control's client coordinates, or -1.
-    [[nodiscard]] int LineAt(const wxPoint& point);
-
-    wxDataViewColumn* column_ = nullptr;
-    // The line the user last clicked, highlighted like a list selection so a
-    // click on an item visibly lands on that item.
-    int selected_line_ = -1;
-    std::vector<wxString> lines_;
-    std::vector<Target> targets_;
-    std::function<void(const Target&)> on_activate_;
+    PaneHeader* header_ = nullptr;
+    DetailsCanvas* canvas_ = nullptr;
 };
 
 } // namespace repomancer::gui

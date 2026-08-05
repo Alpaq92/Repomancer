@@ -91,60 +91,25 @@ wxColour lane_colour(int index) {
     return palette[index % count];
 }
 
-GraphRenderer::GraphRenderer(const std::vector<repomancer::vcs::GraphRow>* rows)
-    : wxDataViewCustomRenderer("long", wxDATAVIEW_CELL_INERT, wxALIGN_LEFT), rows_(rows) {}
+int graph_strip_width(int lanes) { return kMargin * 2 + std::max(1, lanes) * kLaneWidth; }
 
-bool GraphRenderer::SetValue(const wxVariant& value) {
-    row_index_ = value.GetLong();
-    return true;
-}
-
-bool GraphRenderer::GetValue(wxVariant& value) const {
-    value = row_index_;
-    return true;
-}
-
-const repomancer::vcs::GraphRow* GraphRenderer::current_row() const {
-    if (rows_ == nullptr || row_index_ < 0 ||
-        static_cast<std::size_t>(row_index_) >= rows_->size()) {
-        return nullptr;
-    }
-    return &(*rows_)[static_cast<std::size_t>(row_index_)];
-}
-
-wxSize GraphRenderer::GetSize() const {
-    return wxSize(kMargin * 2 + max_lanes_ * kLaneWidth, kRowHeight);
-}
-
-bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
-    const auto* row = current_row();
-    if (row == nullptr) {
-        return true;
-    }
-
-    // Geometry, in coordinates local to the strip painted below.
-    //
-    // Straight runs may overhang into the neighbouring rows — whatever padding
-    // the port leaves around the cell rect gets covered from both sides.
-    // Curves must not: they have to reach their lane exactly at the row
-    // boundary, or the next row picks the line up at the wrong x.
-    const int half = std::max(cell.GetHeight(), kRowHeight) / 2 + 1;
+// The strip is taller than the row: it carries half a row of transparent
+// overhang above and below so straight runs meet across row boundaries.
+// Callers with adjacent rows must clip the blit to the row band, or the
+// overhang wipes the neighbouring rows' curve tails.
+wxBitmap render_graph_strip(const repomancer::vcs::GraphRow& row_data, bool first_row,
+                            bool last_row, int width, int row_height, bool selected,
+                            GraphStyle style) {
+    width = std::max(1, width);
+    const repomancer::vcs::GraphRow* row = &row_data;
+    const int half = std::max(row_height, kRowHeight) / 2 + 1;
     const int overhang = kRowHeight / 2;
-    const int width = std::max(1, cell.GetWidth());
     const int height = 2 * (half + overhang);
     const double middle = half + overhang;
     const double top = middle - half;
     const double bottom = middle + half;
     const double dot_x = lane_x(row->lane);
 
-    // The overhang exists so a lane meets its continuation in the next row
-    // across whatever padding the port leaves around a cell. Above the first
-    // row and below the last there is no continuation, and painting there puts
-    // ink outside the rows — visible as a stray mark when the view is pulled
-    // past its end.
-    const bool first_row = row_index_ == 0;
-    const bool last_row = rows_ != nullptr &&
-                          static_cast<std::size_t>(row_index_) + 1 == rows_->size();
     const double run_top = first_row ? top : 0.0;
     const double run_bottom = last_row ? bottom : static_cast<double>(height);
 
@@ -181,17 +146,12 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
         }
     }
 
-    // Painted offscreen through a graphics context, because the DataView cell
-    // DC hands out neither a wxGCDC nor a context of its own on every port —
-    // drawing straight onto it gives aliased, visibly stepped diagonals.
-    // wxGraphicsContext::Create(wxMemoryDC&) is supported everywhere, so the
-    // strip is composited with antialiasing and then blitted over the row.
-    // A selected row is painted in the system highlight colour, which a lane
-    // of a similar hue vanishes into — the blue mainline against a blue
-    // selection being the obvious case. Lines and dots are laid down over a
-    // wider stroke in the highlight's own text colour first, so every lane
-    // keeps its branch colour and stays legible whatever is behind it.
-    const bool selected = (state & wxDATAVIEW_CELL_SELECTED) != 0;
+    // Painted offscreen through a graphics context, because a plain DC gives
+    // aliased, visibly stepped diagonals. A selected row is painted in the
+    // system highlight colour, which a lane of a similar hue vanishes into —
+    // lines and dots are laid down over a wider casing stroke in the
+    // highlight's own text colour first, so every lane keeps its branch
+    // colour and stays legible whatever is behind it.
     const wxColour casing = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT);
     const double casing_width = kLineWidth + 2.0;
 
@@ -204,9 +164,6 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
         if (gc) {
             painted = true;
             gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
-            // Start from fully transparent so the row's own background — and
-            // its selection highlight — shows through everywhere we do not
-            // draw.
             gc->SetCompositionMode(wxCOMPOSITION_SOURCE);
             gc->SetBrush(wxBrush(wxColour(0, 0, 0, wxALPHA_TRANSPARENT)));
             gc->SetPen(*wxTRANSPARENT_PEN);
@@ -222,25 +179,20 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
                 gc->StrokeLine(line.x, line.y1, line.x, line.y2);
             }
             for (const auto& curve : curves) {
-                if (style_ == GraphStyle::Angular) {
-                    // Orthogonal routing: the line only ever runs straight up,
-                    // down or across, turning through square corners. Which leg
-                    // comes first is fixed by the boundary — whichever end sits
-                    // on a row edge has to arrive vertically, or the next row
+                if (style == GraphStyle::Angular) {
+                    // Orthogonal routing with square corners; whichever end
+                    // sits on a row edge arrives vertically, or the next row
                     // resumes the lane at the wrong x.
                     wxGraphicsPath path = gc->CreatePath();
                     path.MoveToPoint(curve.x1, curve.y1);
                     switch (curve.kind) {
                     case CurveKind::FromDot:
-                        // Out of the dot sideways, then down into the lane.
                         path.AddLineToPoint(curve.x2, curve.y1);
                         break;
                     case CurveKind::IntoDot:
-                        // Down the lane, then across into the dot.
                         path.AddLineToPoint(curve.x1, curve.y2);
                         break;
                     case CurveKind::Crossing: {
-                        // Down, across, and down again — both ends upright.
                         const double mid = (curve.y1 + curve.y2) / 2.0;
                         path.AddLineToPoint(curve.x1, mid);
                         path.AddLineToPoint(curve.x2, mid);
@@ -260,11 +212,9 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
                     gc->StrokePath(path);
                     continue;
                 }
-                // A control point placed straight below its anchor holds the
-                // tangent upright there; offsetting it sideways lets the line
-                // lean into the dot. Every end that lands on a row boundary
-                // keeps the upright one, so the curve meets the straight run in
-                // the next row head-on.
+                // A control point straight below its anchor holds the tangent
+                // upright; offsetting it sideways lets the line lean into the
+                // dot. Row-boundary ends keep the upright one.
                 const double dx = curve.x2 - curve.x1;
                 const double dy = curve.y2 - curve.y1;
                 double c1x = curve.x1;
@@ -303,35 +253,7 @@ bool GraphRenderer::Render(wxRect cell, wxDC* dc, int state) {
             gc->DrawEllipse(dot_x - radius, middle - radius, radius * 2, radius * 2);
         }
     }
-
-    const int origin_y = cell.GetTop() + cell.GetHeight() / 2 - (half + overhang);
-    if (painted) {
-        dc->DrawBitmap(strip, cell.GetLeft(), origin_y, /*useMask=*/true);
-        return true;
-    }
-
-    // No graphics context anywhere: fall back to aliased drawing rather than
-    // showing nothing.
-    for (const auto& line : lines) {
-        dc->SetPen(graph_pen(line.colour));
-        dc->DrawLine(cell.GetLeft() + static_cast<int>(line.x), origin_y + static_cast<int>(line.y1),
-                     cell.GetLeft() + static_cast<int>(line.x),
-                     origin_y + static_cast<int>(line.y2));
-    }
-    for (const auto& curve : curves) {
-        dc->SetPen(graph_pen(curve.colour));
-        dc->DrawLine(cell.GetLeft() + static_cast<int>(curve.x1),
-                     origin_y + static_cast<int>(curve.y1),
-                     cell.GetLeft() + static_cast<int>(curve.x2),
-                     origin_y + static_cast<int>(curve.y2));
-    }
-    const int radius = row->is_merge ? static_cast<int>(kMergeDotRadius)
-                                     : static_cast<int>(kDotRadius);
-    dc->SetBrush(wxBrush(lane_colour(row->color)));
-    dc->SetPen(wxPen(lane_colour(row->color), 1));
-    dc->DrawCircle(cell.GetLeft() + static_cast<int>(dot_x),
-                   origin_y + static_cast<int>(middle), radius);
-    return true;
+    return painted ? strip : wxNullBitmap;
 }
 
 } // namespace repomancer::gui

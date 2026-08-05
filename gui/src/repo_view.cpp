@@ -3,245 +3,238 @@
 
 #include "repo_view.h"
 
-#include <wx/dc.h>
+#include "pane_header.h"
+
 #include <wx/dcclient.h>
+#include <wx/scrolwin.h>
 #include <wx/settings.h>
-#include <wx/utils.h>
+#include <wx/sizer.h>
 
-#ifdef __WXGTK__
-#include <gtk/gtk.h>
-#endif
-
+#include <algorithm>
 #include <vector>
 
 namespace repomancer::gui {
 
 namespace {
 
-// Shared by the renderer and the click hit-test, which must agree on where
-// each line sits.
-constexpr int kPadding = 8; // cell edge to text
+constexpr int kPadding = 8; // canvas edge to content
 constexpr int kLeading = 3;
+constexpr int kDotSize = 8;  // legend dot diameter
+constexpr int kDotGap = 6;   // dot to its label
+constexpr int kBarHeight = 8;
+constexpr int kBarRow = kBarHeight + 6; // the bar row's total height
+constexpr int kBarGap = 2;              // between bar segments
+constexpr int kBarMinWidth = 120;
+constexpr int kScrollStep = 20; // one wheel line, about one text row
 
-std::vector<wxString> split_lines(const wxString& text) {
-    std::vector<wxString> lines;
-    wxString rest = text;
-    while (!rest.empty()) {
-        lines.push_back(rest.BeforeFirst('\n'));
-        const int eol = rest.Find('\n');
-        if (eol == wxNOT_FOUND) {
-            break;
-        }
-        rest = rest.Mid(eol + 1);
-    }
-    return lines;
+// Where a row's label starts, relative to the content's left edge.
+int label_offset(const RepoView::Row& row) {
+    return row.dot ? kDotSize + kDotGap : 0;
 }
-
-// Draws the one cell: a block of lines, headings bold. A stock text renderer
-// shows a single line only, which is no use for a cell that carries the whole
-// summary.
-class DetailsRenderer : public wxDataViewCustomRenderer {
-public:
-    // `selected_line` belongs to the owning view; the renderer only reads it.
-    explicit DetailsRenderer(const int* selected_line)
-        : wxDataViewCustomRenderer("string", wxDATAVIEW_CELL_INERT, wxALIGN_LEFT),
-          selected_line_(selected_line) {}
-
-    bool SetValue(const wxVariant& value) override {
-        lines_ = split_lines(value.GetString());
-        return true;
-    }
-
-    bool GetValue(wxVariant&) const override { return false; }
-
-    wxSize GetSize() const override {
-        int width = 0;
-        int height = kPadding;
-        for (const auto& line : lines_) {
-            const wxSize extent = GetTextExtent(line.empty() ? " " : line);
-            width = wxMax(width, extent.GetWidth());
-            height += extent.GetHeight() + kLeading;
-        }
-        return wxSize(width + 2 * kPadding, height + kPadding);
-    }
-
-    bool Render(wxRect cell, wxDC* dc, int state) override {
-        const wxFont base = dc->GetFont();
-        const bool selected = (state & wxDATAVIEW_CELL_SELECTED) != 0;
-        const wxColour fg = wxSystemSettings::GetColour(
-            selected ? wxSYS_COLOUR_HIGHLIGHTTEXT : wxSYS_COLOUR_WINDOWTEXT);
-
-        dc->SetTextForeground(fg);
-        int y = cell.GetTop() + kPadding;
-        for (std::size_t i = 0; i < lines_.size(); ++i) {
-            const wxString& line = lines_[i];
-            // A heading is any line that is not indented under one.
-            const bool heading = !line.empty() && line[0] != ' ';
-            dc->SetFont(heading ? base.Bold() : base);
-            const wxSize extent = dc->GetTextExtent(line.empty() ? " " : line);
-            const bool highlit =
-                selected_line_ != nullptr && static_cast<int>(i) == *selected_line_;
-            if (highlit) {
-                // A chip hugging the label — the same bounds the hit-test
-                // accepts, so what lights up is exactly what was clickable.
-                dc->SetPen(*wxTRANSPARENT_PEN);
-                dc->SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
-                dc->DrawRoundedRectangle(cell.GetLeft() + kPadding - 4, y - 1,
-                                         extent.GetWidth() + 12, extent.GetHeight() + 2,
-                                         3);
-                dc->SetTextForeground(
-                    wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
-            }
-            dc->DrawText(line, cell.GetLeft() + kPadding, y);
-            if (highlit) {
-                dc->SetTextForeground(fg);
-            }
-            y += extent.GetHeight() + kLeading;
-        }
-        dc->SetFont(base);
-        return true;
-    }
-
-private:
-    std::vector<wxString> lines_;
-    const int* selected_line_;
-};
-
-#ifdef __WXGTK__
-extern "C" {
-static gboolean repo_view_button_press(GtkWidget* widget, GdkEventButton* event,
-                                       gpointer data) {
-    // Only presses on the rows themselves; header clicks arrive on another
-    // GdkWindow and their coordinates would convert into nonsense.
-    if (event->button == 1 &&
-        event->window == gtk_tree_view_get_bin_window(GTK_TREE_VIEW(widget))) {
-        if (event->type == GDK_BUTTON_PRESS) {
-            int x = 0;
-            int y = 0;
-            gtk_tree_view_convert_bin_window_to_widget_coords(
-                GTK_TREE_VIEW(widget), static_cast<int>(event->x),
-                static_cast<int>(event->y), &x, &y);
-            static_cast<repomancer::gui::RepoView*>(data)->OnItemPress(wxPoint(x, y));
-        }
-        // Fully handled: the tree view's own press handling would set a
-        // cursor row and flash its focus decoration over the whole cell.
-        return TRUE;
-    }
-    return FALSE;
-}
-}
-#endif
 
 } // namespace
 
-RepoView::RepoView(wxWindow* parent)
-    : wxDataViewListCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                         // Variable line height: the row is as tall as its
-                         // block of lines, instead of clipping to one line.
-                         // No native frame: the pane draws the outline itself,
-                         // the same hairline every table gets.
-                         wxDV_VARIABLE_LINE_HEIGHT | wxBORDER_NONE) {
-    column_ = new wxDataViewColumn(_("Repository"), new DetailsRenderer(&selected_line_), 0,
-                                   wxCOL_WIDTH_AUTOSIZE, wxALIGN_LEFT, 0);
-    AppendColumn(column_, "string");
-    // One column spanning the pane, exactly like the other pane headers.
-    Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
-        event.Skip();
-        if (column_ != nullptr) {
-            column_->SetWidth(GetClientSize().GetWidth());
-        }
-    });
-
-    // The table has exactly one row, so selecting it means nothing — the
-    // click's position is what carries the intent: the line under it is the
-    // item being clicked.
-#ifdef __WXGTK__
-    // Row selection is disabled outright — letting the press select would
-    // flash the whole cell before the selection could be dropped again — and
-    // the click is taken straight from the tree view's button press, which
-    // wx does not forward as a mouse event for this control.
-    if (GtkWidget* tree = GtkGetTreeView()) {
-        gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(tree)),
-                                    GTK_SELECTION_NONE);
-        // Pointer-driven only: without focus there is no focus row to draw,
-        // and a click here does not pull the focus away from the log.
-        gtk_widget_set_can_focus(tree, FALSE);
-        g_signal_connect(tree, "button-press-event",
-                         G_CALLBACK(repo_view_button_press), this);
+// The scrolled block of rows. Everything — layout, painting, hit-testing,
+// scroll range — comes from the same height walk, so none of them can drift
+// apart.
+class DetailsCanvas : public wxScrolledWindow {
+public:
+    explicit DetailsCanvas(wxWindow* parent)
+        : wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                           wxBORDER_NONE) {
+        SetScrollRate(0, kScrollStep);
+        SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
+        Bind(wxEVT_PAINT, &DetailsCanvas::OnPaint, this);
+        Bind(wxEVT_LEFT_DOWN, &DetailsCanvas::OnLeftDown, this);
+        Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+            event.Skip();
+            Refresh(); // the bar spans the client width
+        });
     }
-#else
-    Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, [this](wxDataViewEvent& event) {
-        event.Skip();
-        if (event.GetItem().IsOk()) {
-            OnItemPress(ScreenToClient(wxGetMousePosition()));
-        }
-        CallAfter([this] { UnselectAll(); });
-    });
-#endif
-}
 
-void RepoView::OnItemPress(const wxPoint& point) {
-    const int line = LineAt(point);
-    const bool acts = line >= 0 && line < static_cast<int>(targets_.size()) &&
-                      !targets_[line].empty();
-    if (acts) {
-        selected_line_ = line;
-        // With no selection to change, nothing else prompts a redraw — and
-        // wx's Refresh does not reach the composite's drawing area on GTK,
-        // so the tree view is asked to repaint directly.
-#ifdef __WXGTK__
-        if (GtkWidget* tree = GtkGetTreeView()) {
-            gtk_widget_queue_draw(tree);
-        }
-#else
+    void SetRows(std::vector<RepoView::Row> rows) {
+        rows_ = std::move(rows);
+        selected_row_ = -1;
+        Relayout();
         Refresh();
-#endif
-        if (on_activate_) {
-            on_activate_(targets_[line]);
+    }
+
+    void SetOnActivate(std::function<void(const RepoView::Target&)> handler) {
+        on_activate_ = std::move(handler);
+    }
+
+private:
+    // A row's height under the given font context. Leaves the row's font set
+    // on `dc`, so a following text measurement matches what is painted.
+    int RowHeight(wxDC& dc, const RepoView::Row& row) const {
+        if (!row.bar.empty()) {
+            return kBarRow;
+        }
+        const wxFont base = GetFont();
+        dc.SetFont(row.heading ? base.Bold() : base);
+        const int text = dc.GetTextExtent(row.text.empty() ? wxString(" ") : row.text)
+                             .GetHeight() +
+                         kLeading;
+        // A section separator needs a breath, not a full blank line.
+        return row.text.empty() ? text / 2 : text;
+    }
+
+    void Relayout() {
+        // One height walk, stored: painting and hit-testing read these
+        // offsets instead of re-measuring every row on every event.
+        wxClientDC dc(this);
+        offsets_.clear();
+        offsets_.reserve(rows_.size() + 1);
+        int width = kBarMinWidth;
+        int y = kPadding;
+        for (const auto& row : rows_) {
+            offsets_.push_back(y);
+            const int row_h = RowHeight(dc, row); // sets the row's font
+            width = wxMax(width,
+                          label_offset(row) +
+                              dc.GetTextExtent(row.text.empty() ? wxString(" ") : row.text)
+                                  .GetWidth());
+            y += row_h;
+        }
+        offsets_.push_back(y);
+        SetVirtualSize(width + 2 * kPadding, y + kPadding);
+    }
+
+    // The row containing unscrolled `y`, or -1.
+    [[nodiscard]] int RowIndexAt(int y) const {
+        if (offsets_.size() < 2 || y < offsets_.front() || y >= offsets_.back()) {
+            return -1;
+        }
+        const auto it = std::upper_bound(offsets_.begin(), offsets_.end(), y);
+        return static_cast<int>(it - offsets_.begin()) - 1;
+    }
+
+    void OnPaint(wxPaintEvent&) {
+        wxPaintDC dc(this);
+        DoPrepareDC(dc); // logical coordinates follow the scroll position
+        const wxColour fg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+        const int width = GetClientSize().GetWidth();
+
+        // Only the rows intersecting the viewport.
+        int view_x = 0;
+        int view_y = 0;
+        GetViewStart(&view_x, &view_y);
+        const int top = view_y * kScrollStep;
+        const int bottom = top + GetClientSize().GetHeight();
+        std::size_t first = 0;
+        if (const int hit = RowIndexAt(std::max(top, offsets_.empty() ? 0 : offsets_.front()));
+            hit > 0) {
+            first = static_cast<std::size_t>(hit);
+        }
+
+        for (std::size_t i = first; i < rows_.size(); ++i) {
+            if (offsets_[i] >= bottom) {
+                break;
+            }
+            const int y = offsets_[i];
+            const RepoView::Row& row = rows_[i];
+            const int height = RowHeight(dc, row); // sets the row's font
+            if (!row.bar.empty()) {
+                DrawBar(dc, row, kPadding, y, width - 2 * kPadding);
+                continue;
+            }
+            const wxSize extent =
+                dc.GetTextExtent(row.text.empty() ? wxString(" ") : row.text);
+            const bool highlit = static_cast<int>(i) == selected_row_;
+            dc.SetTextForeground(fg);
+            if (highlit) {
+                // A chip hugging the label — the same bounds the hit-test
+                // accepts, so what lights up is exactly what was clickable.
+                dc.SetPen(*wxTRANSPARENT_PEN);
+                dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)));
+                dc.DrawRoundedRectangle(kPadding + label_offset(row) - 4, y - 1,
+                                        extent.GetWidth() + 12, extent.GetHeight() + 2, 3);
+                dc.SetTextForeground(
+                    wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT));
+            }
+            if (row.dot) {
+                dc.SetPen(*wxTRANSPARENT_PEN);
+                dc.SetBrush(wxBrush(row.colour));
+                dc.DrawEllipse(kPadding, y + (extent.GetHeight() - kDotSize) / 2, kDotSize,
+                               kDotSize);
+            }
+            dc.DrawText(row.text, kPadding + label_offset(row), y);
         }
     }
+
+    void OnLeftDown(wxMouseEvent& event) {
+        const wxPoint point = CalcUnscrolledPosition(event.GetPosition());
+        const int index = RowIndexAt(point.y);
+        if (index < 0) {
+            return;
+        }
+        const RepoView::Row& row = rows_[static_cast<std::size_t>(index)];
+        if (row.target.empty()) {
+            return;
+        }
+        // An item is only its label: a click in the blank space beside it is
+        // no click on it.
+        wxClientDC dc(this);
+        const wxFont base = GetFont();
+        dc.SetFont(row.heading ? base.Bold() : base);
+        const wxSize extent = dc.GetTextExtent(row.text.empty() ? wxString(" ") : row.text);
+        const int start = kPadding + label_offset(row);
+        if (point.x >= start - 4 && point.x <= start + extent.GetWidth() + 8) {
+            selected_row_ = index;
+            Refresh();
+            if (on_activate_) {
+                on_activate_(row.target);
+            }
+        }
+    }
+
+    static void DrawBar(wxDC& dc, const RepoView::Row& row, int left, int y, int width) {
+        double total = 0.0;
+        for (const auto& segment : row.bar) {
+            total += segment.second;
+        }
+        if (total <= 0.0 || width < kBarMinWidth / 2) {
+            return;
+        }
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        const int gaps = static_cast<int>(row.bar.size() - 1) * kBarGap;
+        const int usable = width - gaps;
+        const int top = y + (kBarRow - kBarHeight) / 2;
+        double carry = 0.0;
+        int x = left;
+        for (const auto& segment : row.bar) {
+            carry += usable * (segment.second / total);
+            const int segment_width = static_cast<int>(carry);
+            carry -= segment_width;
+            if (segment_width > 0) {
+                dc.SetBrush(wxBrush(segment.first));
+                dc.DrawRoundedRectangle(x, top, segment_width, kBarHeight, 2);
+                x += segment_width + kBarGap;
+            }
+        }
+    }
+
+    std::vector<RepoView::Row> rows_;
+    std::vector<int> offsets_; // unscrolled y of each row, plus the end
+    int selected_row_ = -1;
+    std::function<void(const RepoView::Target&)> on_activate_;
+};
+
+RepoView::RepoView(wxWindow* parent) : wxPanel(parent) {
+    header_ = new PaneHeader(this, _("Repository"));
+    canvas_ = new DetailsCanvas(this);
+    auto* sizer = new wxBoxSizer(wxVERTICAL);
+    sizer->Add(header_, 0, wxEXPAND);
+    sizer->Add(canvas_, 1, wxEXPAND);
+    SetSizer(sizer);
 }
 
-int RepoView::LineAt(const wxPoint& point) {
-    if (GetItemCount() == 0) {
-        return -1;
-    }
-    const wxRect cell = GetItemRect(RowToItem(0), column_);
-    if (!cell.Contains(point)) {
-        return -1;
-    }
-    // The same walk the renderer paints by — headings measured in the bold
-    // they are drawn in, so the bands cannot drift apart — and an item is
-    // only its label: a click in the blank space beside it is no click on it.
-    wxClientDC dc(this);
-    const wxFont base = GetFont();
-    int y = cell.GetTop() + kPadding;
-    for (std::size_t i = 0; i < lines_.size(); ++i) {
-        if (point.y < y) {
-            return -1; // in the headroom above the first line
-        }
-        const wxString& line = lines_[i];
-        const bool heading = !line.empty() && line[0] != ' ';
-        dc.SetFont(heading ? base.Bold() : base);
-        const wxSize extent = dc.GetTextExtent(line.empty() ? wxString(" ") : line);
-        if (point.y < y + extent.GetHeight() + kLeading) {
-            const int left = cell.GetLeft() + kPadding - 4;
-            const int right = cell.GetLeft() + kPadding + extent.GetWidth() + 8;
-            return (point.x >= left && point.x <= right) ? static_cast<int>(i) : -1;
-        }
-        y += extent.GetHeight() + kLeading;
-    }
-    return -1;
+void RepoView::SetRows(std::vector<Row> rows) { canvas_->SetRows(std::move(rows)); }
+
+void RepoView::SetOnActivate(std::function<void(const Target&)> handler) {
+    canvas_->SetOnActivate(std::move(handler));
 }
 
-void RepoView::SetDetails(const wxString& details, std::vector<Target> targets) {
-    lines_ = split_lines(details);
-    targets_ = std::move(targets);
-    selected_line_ = -1;
-    DeleteAllItems();
-    wxVector<wxVariant> row;
-    row.push_back(wxVariant(details));
-    AppendItem(row);
-}
+wxWindow* RepoView::canvas() const { return canvas_; }
 
 } // namespace repomancer::gui

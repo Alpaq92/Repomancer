@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Repomancer contributors
 //
-// Draws the commit-graph column of the log view (implementation-plan.md
-// §4.2). The renderer owns no data: it paints the GraphRow the model hands
-// it, so a 100k-row log costs nothing beyond the layout itself.
+// Paints the commit-graph strips of the log view (implementation-plan.md
+// §4.2), plus the lane palette and graph style shared across the GUI.
 
 #pragma once
 
 #include <repomancer/vcs/graph.h>
 
+#include <wx/bitmap.h>
 #include <wx/colour.h>
-#include <wx/dataview.h>
 
 #include <string_view>
 #include <vector>
@@ -29,31 +28,20 @@ enum class GraphStyle {
 // Lane colours: Open Color shade 6, legible on light and dark backgrounds.
 [[nodiscard]] wxColour lane_colour(int index);
 
-class GraphRenderer : public wxDataViewCustomRenderer {
-public:
-    // `rows` must outlive the renderer (owned by the model).
-    explicit GraphRenderer(const std::vector<repomancer::vcs::GraphRow>* rows);
+// Row pitch shared by the strip painter and every scroll computation.
+inline constexpr int kRowHeight = 26;
 
-    bool SetValue(const wxVariant& value) override;
-    bool GetValue(wxVariant& value) const override;
-    wxSize GetSize() const override;
-    bool Render(wxRect cell, wxDC* dc, int state) override;
+// Width the graph column needs for `lanes` lanes.
+[[nodiscard]] int graph_strip_width(int lanes);
 
-    void SetMaxLanes(int lanes) { max_lanes_ = lanes < 1 ? 1 : lanes; }
-    void SetStyle(GraphStyle style) { style_ = style; }
+// Renders one row's graph strip: `width` px wide, centred on a row of
+// `row_height` px with half a row of overhang above and below so straight
+// runs meet across row boundaries. Returns a null bitmap when no graphics
+// context is available.
+[[nodiscard]] wxBitmap render_graph_strip(const repomancer::vcs::GraphRow& row,
+                                          bool first_row, bool last_row, int width,
+                                          int row_height, bool selected,
+                                          GraphStyle style);
 
-    // Row pitch of the owning control. The renderer reports exactly this
-    // height so its cell spans the whole row — otherwise the control centres a
-    // shorter cell and the lane lines break between rows.
-    static constexpr int kRowHeight = 26;
-
-private:
-    [[nodiscard]] const repomancer::vcs::GraphRow* current_row() const;
-
-    const std::vector<repomancer::vcs::GraphRow>* rows_;
-    long row_index_ = -1;
-    int max_lanes_ = 1;
-    GraphStyle style_ = GraphStyle::Angular;
-};
 
 } // namespace repomancer::gui

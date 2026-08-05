@@ -5,18 +5,22 @@
 
 #include "diff_view.h"
 #include "graph_renderer.h"
+#include "log_view.h"
 #include "pane_header.h"
 #include "repo_view.h"
 #include "log_model.h"
 
 #include <wx/aui/aui.h>
-#include <wx/dataview.h>
 #include <wx/frame.h>
 #include <wx/listctrl.h>
 #include <wx/stc/stc.h>
 
+#include <repomancer/vcs/refs.h>
+#include <repomancer/vcs/stats.h>
+
 #include <atomic>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -35,42 +39,42 @@ private:
     void OnGraphStyleSelected(wxCommandEvent& event);
     void OnQuit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);
-    void OnCommitSelected(wxDataViewEvent& event);
+    void ShowCommit(int row);
     void OnFileSelected(wxListEvent& event);
 
     void LoadRepository(const wxString& path);
     void ShowFileDiff(long index);
-    // Forces every visible row to be re-rendered, preserving the selection.
-    void RefreshLogRows();
     void SetDetailsText(const wxString& text);
     // Re-reads system colours into everything that caches them.
     void ApplyThemeToWidgets();
     // Relaunches the application so a new theme actually takes effect.
     void RestartForTheme();
-    void PopulateRepoDetails();
+    void PopulateRepoDetails(
+        const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Ref>>& refs,
+        const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Contributor>>&
+            people,
+        const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::LanguageStat>>&
+            langs);
     // Selects the log row the target names — by commit id, or failing that by
     // the ref name in the row's decorations.
     void JumpToRef(const repomancer::gui::RepoView::Target& target);
-    // Sizes every column to its content and lets Subject absorb the rest.
-    void FitColumns();
 
     wxAuiManager aui_;
-    wxDataViewCtrl* log_view_ = nullptr;
+    wxPanel* log_panel_ = nullptr;
+    repomancer::gui::LogView* log_ = nullptr;
     wxStyledTextCtrl* details_ = nullptr;
     wxPanel* repo_panel_ = nullptr;
     wxSizerItem* repo_margin_ = nullptr;
+    wxSizerItem* details_margin_ = nullptr;
+    wxPanel* files_panel_ = nullptr;
+    wxPanel* diff_panel_ = nullptr;
+    wxSizerItem* diff_margin_ = nullptr;
+    wxSizerItem* log_margin_ = nullptr;
     wxPanel* details_panel_ = nullptr;
     repomancer::gui::RepoView* repo_view_ = nullptr;
     wxListCtrl* files_ = nullptr;
     repomancer::gui::DiffView* diff_ = nullptr;
-    wxObjectDataPtr<CommitLogModel> model_;
-    repomancer::gui::GraphRenderer* graph_renderer_ = nullptr;
-    std::vector<repomancer::gui::PaneHeader*> pane_headers_;
-    wxDataViewColumn* graph_column_ = nullptr;
-    wxDataViewColumn* subject_column_ = nullptr;
-    wxDataViewColumn* author_column_ = nullptr;
-    wxDataViewColumn* date_column_ = nullptr;
-    wxDataViewColumn* hash_column_ = nullptr;
+    std::unique_ptr<CommitLogModel> model_;
     std::filesystem::path repo_path_;
     std::string selected_commit_;
     std::vector<repomancer::vcs::ChangedFile> changed_files_;

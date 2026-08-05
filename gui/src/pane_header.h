@@ -14,13 +14,15 @@
 
 #include <wx/dataview.h>
 
+#ifdef __WXGTK__
+#include <gtk/gtk.h>
+#endif
+
 namespace repomancer::gui {
 
 class PaneHeader : public wxDataViewListCtrl {
 public:
-    PaneHeader(wxWindow* parent, const wxString& title)
-        : wxDataViewListCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                             wxBORDER_NONE) {
+    PaneHeader(wxWindow* parent, const wxString& title) : PaneHeader(parent) {
         column_ = AppendTextColumn(title, wxDATAVIEW_CELL_INERT, wxCOL_WIDTH_AUTOSIZE,
                                    wxALIGN_LEFT, 0);
         // The column spans the pane, so the title reads as the pane's own
@@ -32,6 +34,24 @@ public:
             }
         });
     }
+
+    // The native header's own height, measured from the realized widget.
+    [[nodiscard]] int NativeHeaderHeight() {
+#ifdef __WXGTK__
+        if (GtkWidget* tree = GtkGetTreeView(); tree != nullptr) {
+            int x = 0;
+            int y = 0;
+            gtk_tree_view_convert_bin_window_to_widget_coords(GTK_TREE_VIEW(tree), 0, 0,
+                                                              &x, &y);
+            if (y > 0) {
+                return y;
+            }
+        }
+#endif
+        return GetCharHeight() + 9;
+    }
+
+    void ClampToNativeHeader() { SetHeight(NativeHeaderHeight()); }
 
     void SetTitle(const wxString& title) {
         if (column_ != nullptr) {
@@ -57,6 +77,20 @@ public:
 protected:
     wxSize DoGetBestClientSize() const override {
         return wxSize(-1, height_ > 0 ? height_ : GetCharHeight() + 9);
+    }
+
+    // Columns for derived headers (the log's strip).
+    explicit PaneHeader(wxWindow* parent)
+        : wxDataViewListCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                             wxBORDER_NONE) {
+        // Every header strip clamps itself to its own native header height on
+        // first paint — by then the widget is realized and the measure is
+        // real. All strips are the same widget with the same font, so they
+        // all land on the same height without any external synchronising.
+        Bind(wxEVT_PAINT, [this](wxPaintEvent& event) {
+            event.Skip();
+            ClampToNativeHeader();
+        });
     }
 
 private:

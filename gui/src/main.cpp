@@ -10,6 +10,10 @@
 #include <wx/cmdline.h>
 #include <wx/intl.h>
 
+#ifdef __WXGTK__
+#include <gtk/gtk.h>
+#endif
+
 class RepomancerApp : public wxApp {
 public:
     bool OnInit() override {
@@ -18,6 +22,24 @@ public:
         }
         SetAppName("Repomancer");
         SetVendorName("Repomancer");
+
+#ifdef __WXGTK__
+        // GtkScrolledWindow decorates any edge with more content beyond it
+        // with a dashed "undershoot" line. Every pane here scrolls, so the
+        // dashes read as broken table borders rather than as a hint; the
+        // scrollbars already tell the story.
+        GtkCssProvider* css = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(
+            css,
+            "scrolledwindow undershoot.top, scrolledwindow undershoot.bottom,"
+            "scrolledwindow undershoot.left, scrolledwindow undershoot.right"
+            "{ background-image: none; border: none; }",
+            -1, nullptr);
+        gtk_style_context_add_provider_for_screen(
+            gdk_screen_get_default(), GTK_STYLE_PROVIDER(css),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_object_unref(css);
+#endif
 
         // Theme must be applied before the first window exists (MSW
         // constraint); the choice persists in settings.json.

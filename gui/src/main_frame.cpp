@@ -3,7 +3,10 @@
 
 #include "main_frame.h"
 
+#include "icons.h"
+
 #include <wx/dcclient.h>
+
 
 #include "pane_header.h"
 #include "theme.h"
@@ -44,11 +47,16 @@ enum {
 
 MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, _("Repomancer"), wxDefaultPosition, wxSize(1000, 650)) {
+    // Bitmaps go on before Append: wxGTK ignores a bitmap set afterwards.
     auto* file_menu = new wxMenu;
-    file_menu->Append(wxID_OPEN, _("&Open Repository…\tCtrl-O"),
-                      _("Open a local git repository"));
+    auto* open_item = new wxMenuItem(file_menu, wxID_OPEN, _("&Open Repository…\tCtrl-O"),
+                                     _("Open a local git repository"));
+    open_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kFolderGit));
+    file_menu->Append(open_item);
     file_menu->AppendSeparator();
-    file_menu->Append(wxID_EXIT);
+    auto* quit_item = new wxMenuItem(file_menu, wxID_EXIT);
+    quit_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kExit));
+    file_menu->Append(quit_item);
 
     auto* theme_menu = new wxMenu;
     theme_menu->AppendRadioItem(ID_ThemeSystem, _("&System"));
@@ -59,11 +67,19 @@ MainFrame::MainFrame()
     style_menu->AppendRadioItem(ID_StyleRounded, _("&Rounded"));
 
     auto* view_menu = new wxMenu;
-    view_menu->AppendSubMenu(theme_menu, _("&Theme"));
-    view_menu->AppendSubMenu(style_menu, _("&Graph style"));
+    auto* theme_item = new wxMenuItem(view_menu, wxID_ANY, _("&Theme"), wxEmptyString,
+                                      wxITEM_NORMAL, theme_menu);
+    theme_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kEclipse));
+    view_menu->Append(theme_item);
+    auto* style_item = new wxMenuItem(view_menu, wxID_ANY, _("&Graph style"), wxEmptyString,
+                                      wxITEM_NORMAL, style_menu);
+    style_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kGitPullRequestArrow));
+    view_menu->Append(style_item);
 
     auto* help_menu = new wxMenu;
-    help_menu->Append(wxID_ABOUT);
+    auto* about_item = new wxMenuItem(help_menu, wxID_ABOUT);
+    about_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kBookmark));
+    help_menu->Append(about_item);
 
     auto* menu_bar = new wxMenuBar;
     menu_bar->Append(file_menu, _("&File"));
@@ -93,34 +109,23 @@ MainFrame::MainFrame()
     CreateStatusBar();
     SetStatusText(_("Open a repository to begin"));
 
-    log_view_ = new wxDataViewCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                   wxDV_ROW_LINES);
-    model_ = wxObjectDataPtr<CommitLogModel>(new CommitLogModel);
-    log_view_->AssociateModel(model_.get());
-
-    // Fixed pitch keeps the graph lanes continuous from row to row.
-    log_view_->SetRowHeight(repomancer::gui::GraphRenderer::kRowHeight);
-
-    graph_renderer_ = new repomancer::gui::GraphRenderer(&model_->graph_rows());
-    graph_renderer_->SetStyle(startup_style);
-    graph_column_ = new wxDataViewColumn(_("Graph"), graph_renderer_, CommitLogModel::Col_Graph,
-                                         60, wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE);
-    log_view_->AppendColumn(graph_column_);
-
-    subject_column_ =
-        log_view_->AppendTextColumn(_("Subject"), CommitLogModel::Col_Subject,
-                                    wxDATAVIEW_CELL_INERT, 420, wxALIGN_LEFT,
-                                    wxDATAVIEW_COL_RESIZABLE);
-    author_column_ =
-        log_view_->AppendTextColumn(_("Author"), CommitLogModel::Col_Author,
-                                    wxDATAVIEW_CELL_INERT, 160, wxALIGN_LEFT,
-                                    wxDATAVIEW_COL_RESIZABLE);
-    date_column_ = log_view_->AppendTextColumn(_("Date"), CommitLogModel::Col_Date,
-                                               wxDATAVIEW_CELL_INERT, 140, wxALIGN_LEFT,
-                                               wxDATAVIEW_COL_RESIZABLE);
-    hash_column_ = log_view_->AppendTextColumn(_("Hash"), CommitLogModel::Col_Hash,
-                                               wxDATAVIEW_CELL_INERT, 100, wxALIGN_LEFT,
-                                               wxDATAVIEW_COL_RESIZABLE);
+    model_ = std::make_unique<CommitLogModel>();
+    // The history is an owner-drawn canvas under a native header strip, not a
+    // tree view — see log_view.h for why. Like every other table it sits one
+    // hairline inside its pane, which draws the outer line around it.
+    log_panel_ = new wxPanel(this);
+    log_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    log_ = new repomancer::gui::LogView(log_panel_, model_.get());
+    {
+        // The pane borders the window on the right, so like the Diff pane it
+        // gets a right margin sized with the others once the layout is known.
+        auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+        sizer->Add(log_, 1, wxEXPAND | wxTOP | wxBOTTOM | wxLEFT, 1);
+        log_margin_ = sizer->AddSpacer(0);
+        log_panel_->SetSizer(sizer);
+    }
+    log_->SetStyle(startup_style);
+    log_->SetOnSelect([this](int row) { ShowCommit(row); });
 
     // Wrapped, not clipped: a long subject or a wide body should reflow
     // rather than force horizontal scrolling, and the text needs room to
@@ -128,9 +133,8 @@ MainFrame::MainFrame()
     // Each pane is titled by a real header control sitting above its content,
     // the same kind the log uses for its columns, so both read as one sort of
     // header. wxAUI's own caption is switched off for these panes.
-    const auto titled = [this](wxPanel* panel, const wxString& title, wxWindow* content) {
+    const auto titled = [](wxPanel* panel, const wxString& title, wxWindow* content) {
         auto* header = new repomancer::gui::PaneHeader(panel, title);
-        pane_headers_.push_back(header);
         auto* sizer = new wxBoxSizer(wxVERTICAL);
         sizer->Add(header, 0, wxEXPAND);
         sizer->Add(content, 1, wxEXPAND);
@@ -177,24 +181,60 @@ MainFrame::MainFrame()
                            wxFont(wxFontInfo().Family(wxFONTFAMILY_TELETYPE)));
     titled(details_table, _("Commit details"), details_);
     {
-        auto* outer = new wxBoxSizer(wxVERTICAL);
-        outer->Add(details_table, 1, wxEXPAND | wxALL, 8);
+        // Aligned with its neighbours: the table's header sits level with
+        // "Changed files" and "Diff", one hairline inside the pane, and the
+        // left margin matches the gap between panes (sized with the
+        // sidebar's, once the dock layout is known).
+        auto* outer = new wxBoxSizer(wxHORIZONTAL);
+        details_margin_ = outer->AddSpacer(0);
+        outer->Add(details_table, 1, wxEXPAND | wxTOP | wxBOTTOM | wxRIGHT, 1);
         details_panel_->SetSizer(outer);
     }
 
-    auto* files_panel = new wxPanel(this);
-    files_ = new wxListCtrl(files_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    // Both neighbours get the details pane's arrangement: an outlined table
+    // one hairline inside its pane. Their left edges sit on sashes, which
+    // already provide the gap; the Diff pane borders the window on the
+    // right, so its right margin is sized with the others once the dock
+    // layout is known.
+    files_panel_ = new wxPanel(this);
+    files_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    auto* files_table = new wxPanel(files_panel_, wxID_ANY, wxDefaultPosition,
+                                    wxDefaultSize, wxBORDER_NONE);
+    files_ = new wxListCtrl(files_table, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                             wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
     // wxListCtrl has no internal margin, so a narrow blank column stands in
     // for one and keeps the first label off the border.
     files_->AppendColumn(wxEmptyString, wxLIST_FORMAT_LEFT, 8);
     files_->AppendColumn(_("Change"), wxLIST_FORMAT_LEFT, 90);
     files_->AppendColumn(_("File"), wxLIST_FORMAT_LEFT, 320);
-    titled(files_panel, _("Changed files"), files_);
+    // A stretch filler after the last column, so the header band spans the
+    // pane instead of exposing the list's white body beyond "File".
+    files_->AppendColumn(wxEmptyString, wxLIST_FORMAT_LEFT, 0);
+    files_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+        event.Skip();
+        const int used = files_->GetColumnWidth(0) + files_->GetColumnWidth(1) +
+                         files_->GetColumnWidth(2);
+        files_->SetColumnWidth(3, std::max(0, files_->GetClientSize().GetWidth() - used));
+    });
+    titled(files_table, _("Changed files"), files_);
+    {
+        auto* outer = new wxBoxSizer(wxVERTICAL);
+        outer->Add(files_table, 1, wxEXPAND | wxALL, 1);
+        files_panel_->SetSizer(outer);
+    }
 
-    auto* diff_panel = new wxPanel(this);
-    diff_ = new repomancer::gui::DiffView(diff_panel);
-    titled(diff_panel, _("Diff"), diff_);
+    diff_panel_ = new wxPanel(this);
+    diff_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    auto* diff_table = new wxPanel(diff_panel_, wxID_ANY, wxDefaultPosition,
+                                   wxDefaultSize, wxBORDER_NONE);
+    diff_ = new repomancer::gui::DiffView(diff_table);
+    titled(diff_table, _("Diff"), diff_);
+    {
+        auto* outer = new wxBoxSizer(wxHORIZONTAL);
+        outer->Add(diff_table, 1, wxEXPAND | wxTOP | wxBOTTOM | wxLEFT, 1);
+        diff_margin_ = outer->AddSpacer(0);
+        diff_panel_->SetSizer(outer);
+    }
 
     // The sidebar is a one-column, one-row table: its column header is the
     // pane title, and the row's only cell carries the repository details. It
@@ -240,11 +280,14 @@ MainFrame::MainFrame()
     };
     outlined(repo_panel_, repo_view_);
     outlined(details_panel_, details_table);
+    outlined(files_panel_, files_table);
+    outlined(diff_panel_, diff_table);
+    outlined(log_panel_, log_);
 
     // GitX-style master/detail: history on top, and below it the commit's
     // metadata, the files it touched, and the patch for whichever is selected.
     aui_.SetManagedWindow(this);
-    aui_.AddPane(log_view_, wxAuiPaneInfo().CenterPane().Name("log"));
+    aui_.AddPane(log_panel_, wxAuiPaneInfo().CenterPane().Name("log"));
     aui_.AddPane(repo_panel_, wxAuiPaneInfo()
                                  .Left()
                                  .Name("refs")
@@ -260,7 +303,7 @@ MainFrame::MainFrame()
                                .BestSize(360, 260)
                                .CloseButton(false)
                                  .CaptionVisible(false));
-    aui_.AddPane(files_panel, wxAuiPaneInfo()
+    aui_.AddPane(files_panel_, wxAuiPaneInfo()
                              .Bottom()
                              .Name("files")
                              .Caption(_("Changed files"))
@@ -268,7 +311,7 @@ MainFrame::MainFrame()
                              .CloseButton(false)
                                  .CaptionVisible(false)
                              .Position(1));
-    aui_.AddPane(diff_panel, wxAuiPaneInfo()
+    aui_.AddPane(diff_panel_, wxAuiPaneInfo()
                             .Bottom()
                             .Name("diff")
                             .Caption(_("Diff"))
@@ -286,13 +329,28 @@ MainFrame::MainFrame()
         // Both windows are the frame's own children, so their positions are
         // directly comparable — and unlike screen coordinates, they are valid
         // before the frame is shown.
-        const int gap = log_view_->GetPosition().x -
+        const int gap = log_panel_->GetPosition().x -
                         (repo_panel_->GetPosition().x +
                          repo_panel_->GetSize().GetWidth());
         if (gap > 0 && repo_margin_ != nullptr) {
             repo_margin_->AssignSpacer(gap, 0);
             repo_panel_->Layout();
             repo_panel_->Refresh();
+        }
+        if (gap > 0 && details_margin_ != nullptr) {
+            details_margin_->AssignSpacer(gap, 0);
+            details_panel_->Layout();
+            details_panel_->Refresh();
+        }
+        if (gap > 0 && diff_margin_ != nullptr) {
+            diff_margin_->AssignSpacer(gap, 0);
+            diff_panel_->Layout();
+            diff_panel_->Refresh();
+        }
+        if (gap > 0 && log_margin_ != nullptr) {
+            log_margin_->AssignSpacer(gap, 0);
+            log_panel_->Layout();
+            log_panel_->Refresh();
         }
     });
     ApplyThemeToWidgets();
@@ -302,37 +360,13 @@ MainFrame::MainFrame()
     Bind(wxEVT_MENU, &MainFrame::OnGraphStyleSelected, this, ID_StyleRounded, ID_StyleAngular);
     Bind(wxEVT_MENU, &MainFrame::OnQuit, this, wxID_EXIT);
     Bind(wxEVT_MENU, &MainFrame::OnAbout, this, wxID_ABOUT);
-    log_view_->Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, &MainFrame::OnCommitSelected, this);
     files_->Bind(wxEVT_LIST_ITEM_SELECTED, &MainFrame::OnFileSelected, this);
-    log_view_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
-        event.Skip();
-        FitColumns();
-    });
 }
 
-void MainFrame::FitColumns() {
-    if (log_view_ == nullptr || subject_column_ == nullptr) {
-        return;
-    }
-    // The graph needs room for its lanes, but never less than its own header.
-    const int graph_width =
-        std::max(graph_renderer_->GetSize().GetWidth(),
-                 GetTextExtent(graph_column_->GetTitle()).GetWidth() + 16);
-    graph_column_->SetWidth(graph_width);
 
-    for (auto* column : {author_column_, date_column_, hash_column_}) {
-        column->SetWidth(wxCOL_WIDTH_AUTOSIZE);
-    }
-
-    const int used = graph_width + author_column_->GetWidth() + date_column_->GetWidth() +
-                     hash_column_->GetWidth();
-    const int available = log_view_->GetClientSize().GetWidth() - used - 8;
-    subject_column_->SetWidth(std::max(200, available));
-}
-
-void MainFrame::OnCommitSelected(wxDataViewEvent&) {
-    const wxDataViewItem item = log_view_->GetSelection();
-    const auto* commit = item.IsOk() ? model_->commit_at(model_->GetRow(item)) : nullptr;
+void MainFrame::ShowCommit(int row) {
+    const auto* commit =
+        row >= 0 ? model_->commit_at(static_cast<unsigned int>(row)) : nullptr;
     if (commit == nullptr) {
         SetDetailsText(wxEmptyString);
         files_->DeleteAllItems();
@@ -390,17 +424,17 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
                 return;
             }
             changed_files_ = std::move(files).value();
-            long row = 0;
+            long list_row = 0;
             for (const auto& file : changed_files_) {
                 const auto name = repomancer::vcs::file_change_name(file.change);
-                files_->InsertItem(row, wxEmptyString);
-                files_->SetItem(row, 1, wxString::FromUTF8(std::string(name)));
+                files_->InsertItem(list_row, wxEmptyString);
+                files_->SetItem(list_row, 1, wxString::FromUTF8(std::string(name)));
                 wxString path = wxString::FromUTF8(file.path);
                 if (!file.old_path.empty()) {
                     path = wxString::FromUTF8(file.old_path) + " → " + path;
                 }
-                files_->SetItem(row, 2, path);
-                ++row;
+                files_->SetItem(list_row, 2, path);
+                ++list_row;
             }
             if (!changed_files_.empty()) {
                 files_->SetItemState(0, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
@@ -409,7 +443,12 @@ void MainFrame::OnCommitSelected(wxDataViewEvent&) {
     });
 }
 
-void MainFrame::PopulateRepoDetails() {
+void MainFrame::PopulateRepoDetails(
+    const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Ref>>& refs,
+    const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Contributor>>& people,
+    const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::LanguageStat>>& langs) {
+    using Row = repomancer::gui::RepoView::Row;
+    using Target = repomancer::gui::RepoView::Target;
     // Attacker-influenced strings (branch names, identities) are stripped of
     // control characters before display, as everywhere else in the UI.
     const auto clean = [](const std::string& raw) {
@@ -421,89 +460,97 @@ void MainFrame::PopulateRepoDetails() {
         return wxString::FromUTF8(text);
     };
 
-    wxString details;
-    std::vector<repomancer::gui::RepoView::Target> targets;
-    // Text and targets stay in lockstep: one target entry per line, empty for
-    // lines that are not a ref.
-    const auto add_line = [&](const wxString& text,
-                              repomancer::gui::RepoView::Target target = {}) {
-        details += text + "\n";
-        targets.push_back(std::move(target));
-    };
-    const auto section = [&](const wxString& title) {
-        if (!details.empty()) {
-            add_line(wxEmptyString);
+    std::vector<Row> rows;
+    const auto section = [&rows](const wxString& title) {
+        if (!rows.empty()) {
+            rows.push_back({});
         }
-        add_line(title);
+        Row heading;
+        heading.text = title;
+        heading.heading = true;
+        rows.push_back(std::move(heading));
     };
 
-    const auto refs = GitDriver().refs(repo_path_);
     if (refs.ok()) {
         struct Group {
             repomancer::vcs::RefKind kind;
             wxString title;
-            std::vector<std::pair<wxString, repomancer::gui::RepoView::Target>> items;
+            std::vector<Row> items;
         };
         Group groups[] = {
             {repomancer::vcs::RefKind::LocalBranch, _("Branches"), {}},
             {repomancer::vcs::RefKind::RemoteBranch, _("Remotes"), {}},
-            {repomancer::vcs::RefKind::Tag, _("Tags"), {}},
             {repomancer::vcs::RefKind::Stash, _("Stashes"), {}},
         };
         for (const auto& ref : refs.value()) {
             auto* group = std::find_if(std::begin(groups), std::end(groups),
                                        [&](const Group& g) { return g.kind == ref.kind; });
             if (group == std::end(groups)) {
-                continue;
+                continue; // tags and the rest have no place in the sidebar
             }
-            wxString line = "  " + clean(ref.short_name);
+            Row item;
+            item.text = "  " + clean(ref.short_name);
             if (ref.is_head) {
-                line += " \u2713";
+                item.text += " \u2713";
             }
             if (!ref.upstream.empty()) {
-                line += " \u2192 " + clean(ref.upstream);
+                item.text += " \u2192 " + clean(ref.upstream);
             }
-            group->items.emplace_back(
-                line, repomancer::gui::RepoView::Target{
-                          wxString::FromUTF8(ref.target),
-                          wxString::FromUTF8(ref.short_name)});
+            item.target = Target{wxString::FromUTF8(ref.target),
+                                 wxString::FromUTF8(ref.short_name)};
+            group->items.push_back(std::move(item));
         }
         for (auto& group : groups) {
             if (!group.items.empty()) {
                 section(group.title);
                 for (auto& item : group.items) {
-                    add_line(item.first, std::move(item.second));
+                    rows.push_back(std::move(item));
                 }
             }
         }
     }
 
-    const auto people = GitDriver().contributors(repo_path_);
     if (people.ok() && !people.value().empty()) {
         section(_("Contributors"));
         for (const auto& person : people.value()) {
-            add_line("  " + clean(person.name) +
-                     wxString::Format(wxPLURAL(" (%d commit)", " (%d commits)",
-                                               person.commits),
-                                      person.commits));
+            Row row;
+            row.text = "  " + clean(person.name) +
+                       wxString::Format(wxPLURAL(" (%d commit)", " (%d commits)",
+                                                 person.commits),
+                                        person.commits);
+            rows.push_back(std::move(row));
         }
     }
 
-    const auto langs = GitDriver().languages(repo_path_);
     if (langs.ok() && !langs.value().empty()) {
         section(_("Languages"));
-        for (const auto& language : langs.value()) {
+        // The GitHub arrangement: one stacked bar of the shares, then a
+        // legend of colour dots. The colours are the graph's own palette.
+        Row bar;
+        for (std::size_t i = 0; i < langs.value().size(); ++i) {
+            bar.bar.emplace_back(repomancer::gui::lane_colour(static_cast<int>(i)),
+                                 langs.value()[i].percent);
+        }
+        rows.push_back(std::move(bar));
+        for (std::size_t i = 0; i < langs.value().size(); ++i) {
+            const auto& language = langs.value()[i];
             const wxString share = language.percent < 0.05
                                        ? wxString("<0.1%")
                                        : wxString::Format("%.1f%%", language.percent);
-            add_line("  " + clean(language.name) + "  " + share);
+            Row row;
+            row.text = clean(language.name) + "  " + share;
+            row.dot = true;
+            row.colour = repomancer::gui::lane_colour(static_cast<int>(i));
+            rows.push_back(std::move(row));
         }
     }
 
-    if (details.empty()) {
-        add_line(_("No repository information"));
+    if (rows.empty()) {
+        Row row;
+        row.text = _("No repository information");
+        rows.push_back(std::move(row));
     }
-    repo_view_->SetDetails(details, std::move(targets));
+    repo_view_->SetRows(std::move(rows));
 }
 
 void MainFrame::JumpToRef(const repomancer::gui::RepoView::Target& target) {
@@ -535,12 +582,7 @@ void MainFrame::JumpToRef(const repomancer::gui::RepoView::Target& target) {
             match = ref == name;
         }
         if (match) {
-            const wxDataViewItem item = model_->GetItem(row);
-            log_view_->Select(item);
-            log_view_->EnsureVisible(item);
-            wxDataViewEvent selected(wxEVT_DATAVIEW_SELECTION_CHANGED, log_view_,
-                                     graph_column_, item);
-            OnCommitSelected(selected);
+            log_->Select(static_cast<int>(row));
             return;
         }
     }
@@ -577,6 +619,7 @@ void MainFrame::ApplyThemeToWidgets() {
     details_->StyleClearAll();
 
     diff_->ApplyTheme();
+    log_->InvalidateStrips();
 
     // wxListCtrl and wxTreeCtrl are wx's own generic controls on GTK, not
     // native ones, so they keep whatever colours they were given and do not
@@ -585,9 +628,12 @@ void MainFrame::ApplyThemeToWidgets() {
     const wxColour list_fg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
     repo_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
     details_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    log_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    files_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+    diff_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
     for (wxWindow* control : {static_cast<wxWindow*>(files_),
-                              static_cast<wxWindow*>(repo_view_),
-                              static_cast<wxWindow*>(log_view_)}) {
+                              repo_view_->canvas(),
+                              log_->canvas()}) {
         control->SetBackgroundColour(list_bg);
         control->SetForegroundColour(list_fg);
         control->Refresh();
@@ -619,24 +665,6 @@ void MainFrame::SetDetailsText(const wxString& text) {
     details_->SetReadOnly(true);
 }
 
-void MainFrame::RefreshLogRows() {
-    // wxGTK backs wxDataViewCtrl with a native GtkTreeView, which repaints a
-    // cell only when the model says the row changed — Refresh() alone leaves
-    // the old rendering on screen. Resetting re-queries every row; the
-    // selection is restored by index because a virtual list model addresses
-    // items that way.
-    const wxDataViewItem selected = log_view_->GetSelection();
-    const unsigned int selected_row = selected.IsOk() ? model_->GetRow(selected) : 0;
-    const bool had_selection = selected.IsOk();
-
-    model_->Reset(model_->GetCount());
-
-    if (had_selection && selected_row < model_->GetCount()) {
-        const wxDataViewItem item = model_->GetItem(selected_row);
-        log_view_->Select(item);
-        log_view_->EnsureVisible(item);
-    }
-}
 
 void MainFrame::OnFileSelected(wxListEvent& event) { ShowFileDiff(event.GetIndex()); }
 
@@ -653,8 +681,8 @@ void MainFrame::ShowFileDiff(long index) {
     }
     diff_worker_ = std::thread([this, generation, repo = repo_path_,
                                 commit = selected_commit_, path = file.path] {
-        const auto diff = GitDriver().file_diff(repo, commit, path);
-        CallAfter([this, generation, diff] {
+        auto diff = GitDriver().file_diff(repo, commit, path);
+        CallAfter([this, generation, diff = std::move(diff)] {
             if (generation != diff_generation_.load()) {
                 return;
             }
@@ -676,8 +704,7 @@ void MainFrame::ShowFileDiff(long index) {
 void MainFrame::OnGraphStyleSelected(wxCommandEvent& event) {
     const auto style = event.GetId() == ID_StyleAngular ? repomancer::gui::GraphStyle::Angular
                                                         : repomancer::gui::GraphStyle::Rounded;
-    graph_renderer_->SetStyle(style);
-    RefreshLogRows();
+    log_->SetStyle(style);
 
     auto settings = repomancer::load_settings();
     settings.graph_style = repomancer::gui::graph_style_to_string(style);
@@ -701,7 +728,6 @@ void MainFrame::OnThemeSelected(wxCommandEvent& event) {
             ApplyThemeToWidgets();
             // The graph reads its casing colour per render, so the rows have
             // to be re-rendered for the new highlight to take effect.
-            RefreshLogRows();
         });
     }
 
@@ -765,9 +791,16 @@ void MainFrame::LoadRepository(const wxString& path) {
         GitDriver driver;
         LogOptions options;
         options.max_count = 2000;
-        auto result = driver.log(std::filesystem::path(path_utf8), options);
+        const std::filesystem::path repo(path_utf8);
+        auto result = driver.log(repo, options);
+        // The sidebar's data rides in the same worker: three more git
+        // subprocesses that must not run on the UI thread.
+        auto refs = driver.refs(repo);
+        auto people = driver.contributors(repo);
+        auto langs = driver.languages(repo);
 
-        CallAfter([this, path_utf8, result = std::move(result)]() mutable {
+        CallAfter([this, path_utf8, result = std::move(result), refs = std::move(refs),
+                   people = std::move(people), langs = std::move(langs)]() mutable {
             busy_.store(false);
             if (!result.ok()) {
                 SetStatusText(wxString::Format(
@@ -777,39 +810,20 @@ void MainFrame::LoadRepository(const wxString& path) {
             }
             const auto count = result.value().size();
             model_->ReplaceAll(std::move(result).value());
+            log_->ModelChanged();
             SetDetailsText(wxEmptyString);
             files_->DeleteAllItems();
             changed_files_.clear();
             diff_->Clear();
 
-            // Size the graph column to the widest row of this history, then
-            // fit every other column to what it actually holds.
-            graph_renderer_->SetMaxLanes(model_->max_lanes());
-            FitColumns();
-
             SetStatusText(wxString::Format(_("%zu commits — %s"), count,
                                            wxString::FromUTF8(path_utf8)));
 
-            PopulateRepoDetails();
-
-            // The log's column header is the reference the pane headers line
-            // up with. Its height is not exposed, but the first row's position
-            // in client coordinates is exactly where that header ends.
-            if (model_->GetCount() > 0) {
-                const wxRect row = log_view_->GetItemRect(model_->GetItem(0));
-                for (auto* header : pane_headers_) {
-                    header->SetHeight(row.GetTop());
-                }
-            }
+            PopulateRepoDetails(refs, people, langs);
 
             // Land on the newest commit so the detail panes have content.
             if (count > 0) {
-                const wxDataViewItem first = model_->GetItem(0);
-                log_view_->Select(first);
-                log_view_->EnsureVisible(first);
-                wxDataViewEvent selected(wxEVT_DATAVIEW_SELECTION_CHANGED, log_view_,
-                                         graph_column_, first);
-                OnCommitSelected(selected);
+                log_->Select(0);
             }
         });
     });
