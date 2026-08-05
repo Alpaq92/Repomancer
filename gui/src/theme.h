@@ -9,9 +9,20 @@
 
 #pragma once
 
+#include <wx/colour.h>
+
 #include <string_view>
 
 namespace repomancer::gui {
+
+// `pct`% of `a` mixed into `b` — the one recipe behind the app's hairlines
+// (30% text into background) and hover fills.
+[[nodiscard]] wxColour blend_colour(const wxColour& a, const wxColour& b, int pct);
+
+// The subtle outline colour used around tables and between stacked headers.
+[[nodiscard]] inline wxColour hairline_colour(const wxColour& fg, const wxColour& bg) {
+    return blend_colour(fg, bg, 30);
+}
 
 enum class ThemeMode { System, Light, Dark };
 

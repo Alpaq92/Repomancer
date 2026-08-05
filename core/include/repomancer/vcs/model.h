@@ -64,6 +64,9 @@ struct LogOptions {
     // Show every ref rather than just `rev`'s ancestry — what a history view
     // is expected to display, and what gives the graph its branches.
     bool all_refs = true;
+    // When set, the log follows this one path (renames included) instead of
+    // covering the whole tree.
+    std::string path;
 };
 
 enum class EntryKind {

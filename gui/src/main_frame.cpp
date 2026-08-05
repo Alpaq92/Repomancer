@@ -3,30 +3,35 @@
 
 #include "main_frame.h"
 
+#include "blame_dialog.h"
+#include "commit_dialog.h"
+#include "file_history_dialog.h"
+#include "gtk_header_bar.h"
 #include "icons.h"
-
-#include <wx/dcclient.h>
-
-
 #include "pane_header.h"
+#include "preferences_dialog.h"
+#include "text_sanitize.h"
 #include "theme.h"
+#include "title_bar.h"
 
 #include <repomancer/settings.h>
 #include <repomancer/vcs/git/git_driver.h>
 
 #include <wx/aboutdlg.h>
+#include <wx/aui/dockart.h>
+#include <wx/dcclient.h>
 #include <wx/dirdlg.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
-#include <wx/aui/dockart.h>
 #include <wx/settings.h>
+#include <wx/sizer.h>
 #include <wx/stdpaths.h>
 #include <wx/utils.h>
-#include <wx/sizer.h>
 
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -42,17 +47,63 @@ enum {
     ID_ThemeDark,
     ID_StyleRounded,
     ID_StyleAngular,
+    // Popup menus allocate their own wxID_ANY ids on their menu objects;
+    // frame-level ids continue clear of that range.
+    ID_Refresh = wxID_HIGHEST + 20,
+    ID_Recent1, // … ID_Recent1 + kMaxRecentRepos - 1
 };
 } // namespace
 
-MainFrame::MainFrame()
-    : wxFrame(nullptr, wxID_ANY, _("Repomancer"), wxDefaultPosition, wxSize(1000, 650)) {
+MainFrame::MainFrame() {
+    const auto startup_settings = repomancer::load_settings();
+    recent_repos_ = startup_settings.recent_repos;
+    // Frame chrome is decided once, at creation; nothing after the ctor
+    // reads these (a settings change restarts the process instead).
+    bool integrated_titlebar = false;
+    bool topbar_native = false;
+    repomancer::gui::TitleBar* title_bar = nullptr;
+    (void)topbar_native;
+    (void)title_bar;
+#ifdef REPOMANCER_HAVE_WXBF
+    integrated_titlebar = startup_settings.integrated_titlebar;
+    if (integrated_titlebar) {
+        // wxbf's Create swaps the WM title bar for an empty header, making
+        // room for the integrated strip.
+        MainFrameBase::Create(nullptr, wxID_ANY, _("Repomancer"), wxDefaultPosition,
+                              wxSize(1000, 650));
+    } else {
+        // Plain frame creation on the same base: native decorations, and
+        // none of wxbf's machinery engages.
+        wxFrame::Create(nullptr, wxID_ANY, _("Repomancer"), wxDefaultPosition,
+                        wxSize(1000, 650));
+    }
+#else
+    wxFrame::Create(nullptr, wxID_ANY, _("Repomancer"), wxDefaultPosition,
+                    wxSize(1000, 650));
+#endif
     // Bitmaps go on before Append: wxGTK ignores a bitmap set afterwards.
     auto* file_menu = new wxMenu;
     auto* open_item = new wxMenuItem(file_menu, wxID_OPEN, _("&Open Repository…\tCtrl-O"),
                                      _("Open a local git repository"));
     open_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kFolderGit));
     file_menu->Append(open_item);
+    auto* prefs_item = new wxMenuItem(file_menu, wxID_PREFERENCES,
+                                      _("&Preferences…\tCtrl-,"),
+                                      _("Configure the VCS tools Repomancer drives"));
+    prefs_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kSettings));
+    file_menu->Append(prefs_item);
+    recent_menu_ = new wxMenu;
+    auto* recent_item = new wxMenuItem(file_menu, wxID_ANY, _("Open &Recent"),
+                                       wxEmptyString, wxITEM_NORMAL, recent_menu_);
+    recent_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kFolderClock));
+    file_menu->Append(recent_item);
+    RebuildRecentMenu();
+    auto* refresh_item = new wxMenuItem(file_menu, ID_Refresh, _("&Refresh\tF5"),
+                                        _("Reload the repository from disk"));
+    refresh_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kRotateCw));
+    file_menu->Append(refresh_item);
     file_menu->AppendSeparator();
     auto* quit_item = new wxMenuItem(file_menu, wxID_EXIT);
     quit_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kExit));
@@ -81,15 +132,43 @@ MainFrame::MainFrame()
     about_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kBookmark));
     help_menu->Append(about_item);
 
-    auto* menu_bar = new wxMenuBar;
-    menu_bar->Append(file_menu, _("&File"));
-    menu_bar->Append(view_menu, _("&View"));
-    menu_bar->Append(help_menu, _("&Help"));
-    SetMenuBar(menu_bar);
+#ifdef REPOMANCER_HAVE_WXBF
+    if (integrated_titlebar) {
+        // No native menu bar: the integrated title bar shows the menus as
+        // buttons and pops them on this frame, so the command events land on
+        // the same handlers. The accelerators the menu bar would have
+        // installed are registered explicitly.
+        file_menu_owned_.reset(file_menu);
+        view_menu_owned_.reset(view_menu);
+        help_menu_owned_.reset(help_menu);
+        using Buttons = repomancer::gui::TitleBar::Buttons;
+        const Buttons buttons =
+            repomancer::gui::TitleBar::FromSetting(startup_settings.topbar_buttons);
+        topbar_native = buttons == Buttons::Native;
+        title_bar = new repomancer::gui::TitleBar(
+            this,
+            {{_("File"), file_menu}, {_("View"), view_menu}, {_("Help"), help_menu}},
+            buttons);
+        SetBorderColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+        const wxAcceleratorEntry accelerators[] = {
+            {wxACCEL_CTRL, 'O', wxID_OPEN},
+            {wxACCEL_CTRL, ',', wxID_PREFERENCES},
+            {wxACCEL_NORMAL, WXK_F5, ID_Refresh},
+        };
+        SetAcceleratorTable(wxAcceleratorTable(3, accelerators));
+    }
+#endif
+    if (!integrated_titlebar) {
+        auto* menu_bar = new wxMenuBar;
+        menu_bar->Append(file_menu, _("&File"));
+        menu_bar->Append(view_menu, _("&View"));
+        menu_bar->Append(help_menu, _("&Help"));
+        SetMenuBar(menu_bar);
+    }
 
-    const auto startup_settings = repomancer::load_settings();
     const auto startup_style =
         repomancer::gui::graph_style_from_string(startup_settings.graph_style);
+    git_config_.binary = std::filesystem::path(startup_settings.git_binary);
     style_menu->Check(startup_style == repomancer::gui::GraphStyle::Angular ? ID_StyleAngular
                                                                            : ID_StyleRounded,
                       true);
@@ -133,10 +212,20 @@ MainFrame::MainFrame()
     // Each pane is titled by a real header control sitting above its content,
     // the same kind the log uses for its columns, so both read as one sort of
     // header. wxAUI's own caption is switched off for these panes.
-    const auto titled = [](wxPanel* panel, const wxString& title, wxWindow* content) {
+    const auto titled = [](wxPanel* panel, const wxString& title, wxWindow* content,
+                           bool separated = false) {
         auto* header = new repomancer::gui::PaneHeader(panel, title);
         auto* sizer = new wxBoxSizer(wxVERTICAL);
         sizer->Add(header, 0, wxEXPAND);
+        if (separated) {
+            // A hairline between the pane title and the content's own column
+            // header, so two stacked header bands read as two, not one blur.
+            auto* line = new wxWindow(panel, wxID_ANY, wxDefaultPosition, wxSize(-1, 1));
+            line->SetBackgroundColour(repomancer::gui::hairline_colour(
+                wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT),
+                wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE)));
+            sizer->Add(line, 0, wxEXPAND);
+        }
         sizer->Add(content, 1, wxEXPAND);
         panel->SetSizer(sizer);
     };
@@ -200,23 +289,28 @@ MainFrame::MainFrame()
     files_panel_->SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
     auto* files_table = new wxPanel(files_panel_, wxID_ANY, wxDefaultPosition,
                                     wxDefaultSize, wxBORDER_NONE);
-    files_ = new wxListCtrl(files_table, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                            wxLC_REPORT | wxLC_SINGLE_SEL | wxBORDER_NONE);
-    // wxListCtrl has no internal margin, so a narrow blank column stands in
-    // for one and keeps the first label off the border.
-    files_->AppendColumn(wxEmptyString, wxLIST_FORMAT_LEFT, 8);
-    files_->AppendColumn(_("Change"), wxLIST_FORMAT_LEFT, 90);
-    files_->AppendColumn(_("File"), wxLIST_FORMAT_LEFT, 320);
-    // A stretch filler after the last column, so the header band spans the
-    // pane instead of exposing the list's white body beyond "File".
-    files_->AppendColumn(wxEmptyString, wxLIST_FORMAT_LEFT, 0);
+    // Native, not wx's generic list: the generic control decorates the
+    // focused row with a dotted rectangle, which reads as a broken highlight.
+    files_ = new wxDataViewListCtrl(files_table, wxID_ANY, wxDefaultPosition,
+                                    wxDefaultSize, wxDV_SINGLE | wxBORDER_NONE);
+    // The native list pads its cells itself — no spacer column needed. The
+    // trailing filler keeps the header band spanning the pane.
+    files_->AppendTextColumn(_("Change"), wxDATAVIEW_CELL_INERT, 90);
+    files_->AppendTextColumn(_("File"), wxDATAVIEW_CELL_INERT, 320);
+    files_->AppendTextColumn(wxEmptyString, wxDATAVIEW_CELL_INERT, 0);
     files_->Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
         event.Skip();
-        const int used = files_->GetColumnWidth(0) + files_->GetColumnWidth(1) +
-                         files_->GetColumnWidth(2);
-        files_->SetColumnWidth(3, std::max(0, files_->GetClientSize().GetWidth() - used));
+        int used = 0;
+        for (unsigned int i = 0; i < 2; ++i) {
+            if (const wxDataViewColumn* column = files_->GetColumn(i)) {
+                used += column->GetWidth();
+            }
+        }
+        if (wxDataViewColumn* filler = files_->GetColumn(2)) {
+            filler->SetWidth(std::max(0, files_->GetClientSize().GetWidth() - used));
+        }
     });
-    titled(files_table, _("Changed files"), files_);
+    titled(files_table, _("Changed files"), files_, /*separated=*/true);
     {
         auto* outer = new wxBoxSizer(wxVERTICAL);
         outer->Add(files_table, 1, wxEXPAND | wxALL, 1);
@@ -246,6 +340,8 @@ MainFrame::MainFrame()
     repo_view_ = new repomancer::gui::RepoView(repo_panel_);
     repo_view_->SetOnActivate(
         [this](const repomancer::gui::RepoView::Target& target) { JumpToRef(target); });
+    repo_view_->SetOnBranchMenu(
+        [this](const wxString& branch) { OnBranchMenu(branch); });
     {
         // Horizontal: a spacer, sized once the dock layout is known, then the
         // table filling the rest. One pixel on the other sides keeps room for
@@ -262,11 +358,9 @@ MainFrame::MainFrame()
     const auto outlined = [](wxPanel* pane, wxWindow* table) {
         pane->Bind(wxEVT_PAINT, [pane, table](wxPaintEvent&) {
             wxPaintDC dc(pane);
-            const wxColour fg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
-            const wxColour bg = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
-            const auto blend = [](int a, int b) { return (a * 30 + b * 70) / 100; };
-            dc.SetPen(wxPen(wxColour(blend(fg.Red(), bg.Red()), blend(fg.Green(), bg.Green()),
-                                     blend(fg.Blue(), bg.Blue())),
+            dc.SetPen(wxPen(repomancer::gui::hairline_colour(
+                                wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT),
+                                wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE)),
                             1));
             dc.SetBrush(*wxTRANSPARENT_BRUSH);
             wxRect box = table->GetRect();
@@ -287,6 +381,33 @@ MainFrame::MainFrame()
     // GitX-style master/detail: history on top, and below it the commit's
     // metadata, the files it touched, and the patch for whichever is selected.
     aui_.SetManagedWindow(this);
+#ifdef REPOMANCER_HAVE_WXBF
+#ifdef __WXGTK__
+    if (integrated_titlebar && topbar_native) {
+        // The panel moves into the window's header bar; GTK draws the
+        // theme's own window buttons and handles dragging.
+        title_bar->Layout();
+        repomancer::gui::host_in_header_bar(
+            GetHandle(), title_bar->GetHandle(), title_bar->GetBestSize().x,
+            FromDIP(32), startup_settings.topbar_sharp_corners);
+    }
+#endif
+    if (integrated_titlebar && !topbar_native)
+        aui_.AddPane(title_bar, wxAuiPaneInfo()
+                                 .Name("titlebar")
+                                 .Top()
+                                 .Layer(2)
+                                 .CaptionVisible(false)
+                                 .PaneBorder(false)
+                                 .Gripper(false)
+                                 .Floatable(false)
+                                 .Movable(false)
+                                 .Dockable(false)
+                                 .DockFixed()
+                                 .Resizable(false)
+                                 .MinSize(-1, repomancer::gui::TitleBar::kHeight)
+                                 .MaxSize(-1, repomancer::gui::TitleBar::kHeight));
+#endif
     aui_.AddPane(log_panel_, wxAuiPaneInfo().CenterPane().Name("log"));
     aui_.AddPane(repo_panel_, wxAuiPaneInfo()
                                  .Left()
@@ -358,13 +479,297 @@ MainFrame::MainFrame()
     Bind(wxEVT_MENU, &MainFrame::OnOpenRepository, this, wxID_OPEN);
     Bind(wxEVT_MENU, &MainFrame::OnThemeSelected, this, ID_ThemeSystem, ID_ThemeDark);
     Bind(wxEVT_MENU, &MainFrame::OnGraphStyleSelected, this, ID_StyleRounded, ID_StyleAngular);
+    Bind(wxEVT_MENU, &MainFrame::OnPreferences, this, wxID_PREFERENCES);
+    Bind(
+        wxEVT_MENU,
+        [this](wxCommandEvent&) {
+            if (!repo_path_.empty() && !busy_.load()) {
+                ReloadRepository();
+            }
+        },
+        ID_Refresh);
+    Bind(
+        wxEVT_MENU,
+        [this](wxCommandEvent& event) {
+            const std::size_t index = static_cast<std::size_t>(event.GetId() - ID_Recent1);
+            if (index < recent_repos_.size() && !busy_.load()) {
+                LoadRepository(wxString::FromUTF8(recent_repos_[index]));
+            }
+        },
+        ID_Recent1, ID_Recent1 + repomancer::kMaxRecentRepos - 1);
     Bind(wxEVT_MENU, &MainFrame::OnQuit, this, wxID_EXIT);
     Bind(wxEVT_MENU, &MainFrame::OnAbout, this, wxID_ABOUT);
-    files_->Bind(wxEVT_LIST_ITEM_SELECTED, &MainFrame::OnFileSelected, this);
+    files_->Bind(wxEVT_DATAVIEW_SELECTION_CHANGED, &MainFrame::OnFileSelected, this);
+    files_->Bind(wxEVT_DATAVIEW_ITEM_CONTEXT_MENU, [this](wxDataViewEvent&) {
+        const int row = files_->GetSelectedRow();
+        if (row == wxNOT_FOUND) {
+            return;
+        }
+        wxMenu menu;
+        using repomancer::gui::icons::menu_icon;
+        // Append + bind in one place; wx allots the ids, so this menu can
+        // never collide with frame-level ones.
+        const auto add = [&menu](const wxString& label, const char* icon,
+                                 std::function<void()> action) {
+            auto* item = new wxMenuItem(&menu, wxID_ANY, label);
+            if (icon != nullptr) {
+                item->SetBitmap(menu_icon(icon));
+            }
+            menu.Append(item);
+            menu.Bind(
+                wxEVT_MENU,
+                [action = std::move(action)](wxCommandEvent&) { action(); },
+                item->GetId());
+        };
+        const auto at = static_cast<std::size_t>(row);
+        if (worktree_mode_ && at < worktree_entries_.size()) {
+            const auto& entry = worktree_entries_[at];
+            const bool staged =
+                entry.kind == repomancer::vcs::EntryKind::Ordinary && entry.x != '.';
+            const bool stageable = entry.kind == repomancer::vcs::EntryKind::Untracked ||
+                                   entry.y != '.';
+            if (stageable) {
+                add(_("&Stage"), nullptr, [this, at] { StageWorktreeFile(at, true); });
+            }
+            if (staged) {
+                add(_("&Unstage"), nullptr,
+                    [this, at] { StageWorktreeFile(at, false); });
+            }
+            const bool any_staged = std::any_of(
+                worktree_entries_.begin(), worktree_entries_.end(), [](const auto& e) {
+                    return e.kind == repomancer::vcs::EntryKind::Ordinary && e.x != '.';
+                });
+            if (any_staged) {
+                add(_("&Commit Staged Changes…"), nullptr, [this] { CommitStaged(); });
+            }
+            if (stageable || staged || any_staged) {
+                menu.AppendSeparator();
+            }
+        }
+        add(_("&Open file"), repomancer::gui::icons::kFile,
+            [this, at] { OpenChangedFile(at); });
+        add(_("Open containing &folder"), repomancer::gui::icons::kFolder,
+            [this, at] { OpenContainingFolder(at); });
+        menu.AppendSeparator();
+        add(_("File &History…"), repomancer::gui::icons::kClock4,
+            [this, at] { ShowFileHistory(at); });
+        add(_("&Blame…"), repomancer::gui::icons::kSearch,
+            [this, at] { ShowFileBlame(at); });
+        files_->PopupMenu(&menu);
+    });
 }
 
 
+namespace {
+
+// A porcelain XY pair as a human word for the Change column.
+wxString worktree_change_label(const repomancer::vcs::StatusEntry& entry) {
+    using repomancer::vcs::EntryKind;
+    switch (entry.kind) {
+    case EntryKind::Untracked:
+        return _("untracked");
+    case EntryKind::Ignored:
+        return _("ignored");
+    case EntryKind::Unmerged:
+        return _("unmerged");
+    case EntryKind::RenamedCopied:
+        return _("renamed");
+    case EntryKind::Ordinary:
+        break;
+    }
+    const char state = entry.y != '.' ? entry.y : entry.x;
+    switch (state) {
+    case 'M':
+        return _("modified");
+    case 'A':
+        return _("added");
+    case 'D':
+        return _("deleted");
+    case 'T':
+        return _("type changed");
+    default:
+        return _("changed");
+    }
+}
+
+} // namespace
+
+void MainFrame::ReloadRepository() {
+    LoadRepository(wxString::FromUTF8(repo_path_.string()));
+}
+
+void MainFrame::ShowWorktree() {
+    SetStatusText(_("Reading the working tree…"));
+    RunGitOp(
+        _("Could not read the working tree: "),
+        [](const std::filesystem::path& repo,
+           const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).status(repo);
+        },
+        [this](repomancer::vcs::StatusSnapshot snapshot) {
+            worktree_mode_ = true;
+            selected_commit_.clear();
+            worktree_entries_ = snapshot.entries;
+
+            wxString text;
+            text << _("Working tree") << "\n";
+            text << _("Branch:  ")
+                 << repomancer::gui::sanitized_utf8(snapshot.branch.head) << "\n";
+            if (!snapshot.branch.upstream.empty()) {
+                text << _("Upstream: ")
+                     << repomancer::gui::sanitized_utf8(snapshot.branch.upstream)
+                     << wxString::Format("  (+%d / -%d)", snapshot.branch.ahead,
+                                         snapshot.branch.behind)
+                     << "\n";
+            }
+            text << "\n"
+                 << wxString::Format(wxPLURAL("%zu changed file", "%zu changed files",
+                                              snapshot.entries.size()),
+                                     snapshot.entries.size());
+            SetDetailsText(text);
+
+            // Keep the user's place across stage/unstage refreshes.
+            std::string keep;
+            if (const int row = files_->GetSelectedRow();
+                row != wxNOT_FOUND &&
+                static_cast<std::size_t>(row) < changed_files_.size()) {
+                keep = changed_files_[static_cast<std::size_t>(row)].path;
+            }
+
+            files_->DeleteAllItems();
+            changed_files_.clear();
+            diff_->ShowMessage(_("Select a file to see its changes."));
+            for (const auto& entry : snapshot.entries) {
+                repomancer::vcs::ChangedFile file;
+                file.path = entry.path;
+                file.old_path = entry.orig_path;
+                changed_files_.push_back(file);
+                AppendFileRow(worktree_change_label(entry), entry.path,
+                              entry.orig_path);
+            }
+            if (!changed_files_.empty()) {
+                int select = 0;
+                for (std::size_t i = 0; i < changed_files_.size(); ++i) {
+                    if (changed_files_[i].path == keep) {
+                        select = static_cast<int>(i);
+                        break;
+                    }
+                }
+                files_->SelectRow(select);
+                ShowFileDiff(select);
+            }
+            SetStatusText(wxString::Format(
+                wxPLURAL("Working tree — %zu changed file",
+                         "Working tree — %zu changed files",
+                         snapshot.entries.size()),
+                snapshot.entries.size()));
+        });
+}
+
+void MainFrame::StageWorktreeFile(std::size_t index, bool stage) {
+    if (index >= worktree_entries_.size()) {
+        return;
+    }
+    const std::string path = worktree_entries_[index].path;
+    RunGitOp(
+        _("Staging failed: "),
+        [path, stage](const std::filesystem::path& repo,
+                      const repomancer::vcs::git::GitConfig& config) {
+            return stage ? GitDriver(config).stage(repo, path)
+                         : GitDriver(config).unstage(repo, path);
+        },
+        [this](std::string) { ShowWorktree(); /* fresh status, fresh lists */ });
+}
+
+void MainFrame::CommitStaged() {
+    const int staged = static_cast<int>(std::count_if(
+        worktree_entries_.begin(), worktree_entries_.end(), [](const auto& e) {
+            return e.kind == repomancer::vcs::EntryKind::Ordinary && e.x != '.';
+        }));
+    repomancer::gui::CommitDialog dialog(this, staged);
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::string message(dialog.Message().utf8_str());
+    SetStatusText(_("Committing…"));
+    RunGitOp(
+        _("Commit failed: "),
+        [message](const std::filesystem::path& repo,
+                  const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).commit(repo, message);
+        },
+        [this](std::string) { ReloadRepository(); /* the history changed */ });
+}
+
+void MainFrame::OnBranchMenu(const wxString& branch) {
+    const std::string name(branch.utf8_str());
+    wxMenu menu;
+    using repomancer::gui::icons::menu_icon;
+    auto* switch_item = new wxMenuItem(
+        &menu, wxID_ANY, wxString::Format(_("&Switch to \"%s\""), branch));
+    switch_item->SetBitmap(menu_icon(repomancer::gui::icons::kSquareArrowRightEnter));
+    menu.Append(switch_item);
+    switch_item->Enable(name != current_branch_);
+    auto* new_branch_item = new wxMenuItem(&menu, wxID_ANY, _("&New Branch Here…"));
+    new_branch_item->SetBitmap(menu_icon(repomancer::gui::icons::kGitBranchPlus));
+    menu.Append(new_branch_item);
+    menu.Bind(
+        wxEVT_MENU, [this, name](wxCommandEvent&) { SwitchBranch(name); },
+        switch_item->GetId());
+    menu.Bind(
+        wxEVT_MENU,
+        [this, name](wxCommandEvent&) {
+            // The new branch starts at HEAD of the clicked branch only when
+            // that branch is checked out; keep it simple and explicit: the
+            // dialog names it, creation happens at the current HEAD.
+            wxTextEntryDialog dialog(this, _("Name for the new branch:"),
+                                     _("New Branch"));
+            if (dialog.ShowModal() == wxID_OK &&
+                !dialog.GetValue().Trim(true).Trim(false).empty()) {
+                CreateBranch(std::string(
+                    dialog.GetValue().Trim(true).Trim(false).utf8_str()));
+            }
+        },
+        new_branch_item->GetId());
+    repo_view_->PopupMenu(&menu);
+}
+
+void MainFrame::SwitchBranch(const std::string& branch) {
+    SetStatusText(wxString::Format(_("Switching to %s…"), wxString::FromUTF8(branch)));
+    RunGitOp(
+        _("Switch failed: "),
+        [branch](const std::filesystem::path& repo,
+                 const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).switch_branch(repo, branch);
+        },
+        [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::CreateBranch(const std::string& branch) {
+    RunGitOp(
+        _("Branch creation failed: "),
+        [branch](const std::filesystem::path& repo,
+                 const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).create_branch(repo, branch, /*checkout=*/true);
+        },
+        [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::AppendFileRow(const wxString& change, const std::string& path,
+                              const std::string& old_path) {
+    wxString shown = repomancer::gui::sanitized_utf8(path);
+    if (!old_path.empty()) {
+        shown = repomancer::gui::sanitized_utf8(old_path) + " \u2192 " + shown;
+    }
+    wxVector<wxVariant> row;
+    row.push_back(wxVariant(change));
+    row.push_back(wxVariant(shown));
+    row.push_back(wxVariant(wxEmptyString));
+    files_->AppendItem(row);
+}
+
 void MainFrame::ShowCommit(int row) {
+    worktree_mode_ = false;
     const auto* commit =
         row >= 0 ? model_->commit_at(static_cast<unsigned int>(row)) : nullptr;
     if (commit == nullptr) {
@@ -377,7 +782,7 @@ void MainFrame::ShowCommit(int row) {
     }
     selected_commit_ = commit->hash;
 
-    const auto utf8 = [](const std::string& text) { return wxString::FromUTF8(text); };
+    const auto& utf8 = repomancer::gui::sanitized_utf8;
     wxString text;
     text << _("Commit:  ") << utf8(commit->hash) << "\n";
     for (const auto& parent : commit->parents) {
@@ -411,8 +816,8 @@ void MainFrame::ShowCommit(int row) {
         files_worker_.join();
     }
     files_worker_ = std::thread([this, generation, repo = repo_path_,
-                                 commit = selected_commit_] {
-        auto files = GitDriver().changed_files(repo, commit);
+                                 commit = selected_commit_, config = git_config_] {
+        auto files = GitDriver(config).changed_files(repo, commit);
         CallAfter([this, generation, files = std::move(files)]() mutable {
             if (generation != files_generation_.load()) {
                 return;
@@ -424,26 +829,23 @@ void MainFrame::ShowCommit(int row) {
                 return;
             }
             changed_files_ = std::move(files).value();
-            long list_row = 0;
             for (const auto& file : changed_files_) {
                 const auto name = repomancer::vcs::file_change_name(file.change);
-                files_->InsertItem(list_row, wxEmptyString);
-                files_->SetItem(list_row, 1, wxString::FromUTF8(std::string(name)));
-                wxString path = wxString::FromUTF8(file.path);
-                if (!file.old_path.empty()) {
-                    path = wxString::FromUTF8(file.old_path) + " → " + path;
-                }
-                files_->SetItem(list_row, 2, path);
-                ++list_row;
+                AppendFileRow(wxString::FromUTF8(std::string(name)), file.path,
+                              file.old_path);
             }
             if (!changed_files_.empty()) {
-                files_->SetItemState(0, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED);
+                files_->SelectRow(0);
+                // Programmatic selection sends no event; show the diff
+                // ourselves, as a click would.
+                ShowFileDiff(0);
             }
         });
     });
 }
 
 void MainFrame::PopulateRepoDetails(
+    const repomancer::vcs::VcsResult<repomancer::vcs::StatusSnapshot>& status,
     const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Ref>>& refs,
     const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Contributor>>& people,
     const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::LanguageStat>>& langs) {
@@ -451,14 +853,7 @@ void MainFrame::PopulateRepoDetails(
     using Target = repomancer::gui::RepoView::Target;
     // Attacker-influenced strings (branch names, identities) are stripped of
     // control characters before display, as everywhere else in the UI.
-    const auto clean = [](const std::string& raw) {
-        std::string text;
-        text.reserve(raw.size());
-        for (const char ch : raw) {
-            text.push_back(static_cast<unsigned char>(ch) < 0x20 ? ' ' : ch);
-        }
-        return wxString::FromUTF8(text);
-    };
+    const auto& clean = repomancer::gui::sanitized_utf8;
 
     std::vector<Row> rows;
     const auto section = [&rows](const wxString& title) {
@@ -470,6 +865,17 @@ void MainFrame::PopulateRepoDetails(
         heading.heading = true;
         rows.push_back(std::move(heading));
     };
+
+    if (status.ok() && !status.value().entries.empty()) {
+        section(_("Working tree"));
+        Row dirty;
+        dirty.text = "  " + wxString::Format(
+                               wxPLURAL("%zu changed file", "%zu changed files",
+                                        status.value().entries.size()),
+                               status.value().entries.size());
+        dirty.target.kind = Target::Kind::Worktree;
+        rows.push_back(std::move(dirty));
+    }
 
     if (refs.ok()) {
         struct Group {
@@ -496,8 +902,12 @@ void MainFrame::PopulateRepoDetails(
             if (!ref.upstream.empty()) {
                 item.text += " \u2192 " + clean(ref.upstream);
             }
-            item.target = Target{wxString::FromUTF8(ref.target),
-                                 wxString::FromUTF8(ref.short_name)};
+            item.target.hash = wxString::FromUTF8(ref.target);
+            item.target.name = wxString::FromUTF8(ref.short_name);
+            item.branch = ref.kind == repomancer::vcs::RefKind::LocalBranch;
+            if (ref.is_head) {
+                current_branch_ = ref.short_name;
+            }
             group->items.push_back(std::move(item));
         }
         for (auto& group : groups) {
@@ -554,6 +964,10 @@ void MainFrame::PopulateRepoDetails(
 }
 
 void MainFrame::JumpToRef(const repomancer::gui::RepoView::Target& target) {
+    if (target.kind == repomancer::gui::RepoView::Target::Kind::Worktree) {
+        ShowWorktree();
+        return;
+    }
     const std::string hash(target.hash.utf8_str());
     const std::string name(target.name.utf8_str());
     const unsigned int count = model_->GetCount();
@@ -588,7 +1002,7 @@ void MainFrame::JumpToRef(const repomancer::gui::RepoView::Target& target) {
     }
 }
 
-void MainFrame::RestartForTheme() {
+void MainFrame::RestartToApplySettings() {
     // Where the toolkit cannot restyle windows that already exist, the way to
     // honour the choice is to start again with it: the theme is resolved when
     // a window is created, so a fresh process gets it right. The setting is
@@ -621,7 +1035,7 @@ void MainFrame::ApplyThemeToWidgets() {
     diff_->ApplyTheme();
     log_->InvalidateStrips();
 
-    // wxListCtrl and wxTreeCtrl are wx's own generic controls on GTK, not
+    // Some controls are wx's own generic implementations on GTK, not
     // native ones, so they keep whatever colours they were given and do not
     // follow a theme change by themselves.
     const wxColour list_bg = wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX);
@@ -666,11 +1080,16 @@ void MainFrame::SetDetailsText(const wxString& text) {
 }
 
 
-void MainFrame::OnFileSelected(wxListEvent& event) { ShowFileDiff(event.GetIndex()); }
+void MainFrame::OnFileSelected(wxDataViewEvent&) {
+    const int row = files_->GetSelectedRow();
+    if (row != wxNOT_FOUND) {
+        ShowFileDiff(row);
+    }
+}
 
 void MainFrame::ShowFileDiff(long index) {
     if (index < 0 || static_cast<std::size_t>(index) >= changed_files_.size() ||
-        selected_commit_.empty()) {
+        (selected_commit_.empty() && !worktree_mode_)) {
         return;
     }
     const auto& file = changed_files_[static_cast<std::size_t>(index)];
@@ -680,8 +1099,10 @@ void MainFrame::ShowFileDiff(long index) {
         diff_worker_.join();
     }
     diff_worker_ = std::thread([this, generation, repo = repo_path_,
-                                commit = selected_commit_, path = file.path] {
-        auto diff = GitDriver().file_diff(repo, commit, path);
+                                commit = selected_commit_, path = file.path,
+                                worktree = worktree_mode_, config = git_config_] {
+        auto diff = worktree ? GitDriver(config).worktree_diff(repo, path)
+                             : GitDriver(config).file_diff(repo, commit, path);
         CallAfter([this, generation, diff = std::move(diff)] {
             if (generation != diff_generation_.load()) {
                 return;
@@ -693,7 +1114,9 @@ void MainFrame::ShowFileDiff(long index) {
                 return;
             }
             if (diff.value().empty()) {
-                diff_->ShowMessage(_("No textual changes."));
+                diff_->ShowMessage(worktree_mode_
+                                       ? _("No diff — the file is untracked or binary.")
+                                       : _("No textual changes."));
                 return;
             }
             diff_->ShowDiff(diff.value());
@@ -736,7 +1159,7 @@ void MainFrame::OnThemeSelected(wxCommandEvent& event) {
     repomancer::save_settings(settings);
 
     if (!applied_live) {
-        RestartForTheme();
+        RestartToApplySettings();
     }
 }
 
@@ -750,7 +1173,145 @@ MainFrame::~MainFrame() {
     if (diff_worker_.joinable()) {
         diff_worker_.join();
     }
+    if (op_worker_.joinable()) {
+        op_worker_.join();
+    }
     aui_.UnInit();
+}
+
+void MainFrame::OnPreferences(wxCommandEvent&) {
+    const auto before = repomancer::load_settings();
+    repomancer::gui::PreferencesDialog dialog(this, before);
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+    const auto settings = dialog.Result();
+    const bool titlebar_changed =
+        settings.integrated_titlebar != before.integrated_titlebar ||
+        settings.topbar_buttons != before.topbar_buttons ||
+        settings.topbar_sharp_corners != before.topbar_sharp_corners;
+    repomancer::save_settings(settings);
+    git_config_.binary = std::filesystem::path(settings.git_binary);
+    if (titlebar_changed) {
+        // The frame's chrome is chosen at creation; a fresh process applies
+        // it, the same way the theme restart works.
+        RestartToApplySettings();
+        return;
+    }
+    SetStatusText(wxString::Format(_("Git binary: %s — takes effect on the next operation"),
+                                   wxString::FromUTF8(settings.git_binary)));
+}
+
+void MainFrame::ShowFileHistory(std::size_t index) {
+    if (index >= changed_files_.size()) {
+        return;
+    }
+    const std::string path = changed_files_[index].path;
+    SetStatusText(wxString::Format(_("Reading history of %s…"),
+                                   wxString::FromUTF8(path)));
+    RunGitOp(
+        _("Could not read the file's history: "),
+        [path](const std::filesystem::path& repo,
+               const repomancer::vcs::git::GitConfig& config) {
+            LogOptions options;
+            options.all_refs = false;
+            options.path = path;
+            return GitDriver(config).log(repo, options);
+        },
+        [this, path](std::vector<repomancer::vcs::Commit> commits) {
+            SetStatusText(wxString::Format(
+                wxPLURAL("%zu commit touch %s", "%zu commits touch %s",
+                         commits.size()),
+                commits.size(), wxString::FromUTF8(path)));
+            repomancer::gui::FileHistoryDialog dialog(
+                this, wxString::FromUTF8(path), std::move(commits));
+            if (dialog.ShowModal() == wxID_OK && !dialog.SelectedHash().empty()) {
+                // The main log shows every ref, so the commit is normally
+                // there; jumping reuses the sidebar's hash lookup.
+                repomancer::gui::RepoView::Target target;
+                target.hash = wxString::FromUTF8(dialog.SelectedHash());
+                JumpToRef(target);
+            }
+        });
+}
+
+void MainFrame::ShowFileBlame(std::size_t index) {
+    if (index >= changed_files_.size()) {
+        return;
+    }
+    const std::string path = changed_files_[index].path;
+    SetStatusText(wxString::Format(_("Reading blame of %s…"), wxString::FromUTF8(path)));
+    RunGitOp(
+        _("Could not read blame: "),
+        [path](const std::filesystem::path& repo,
+               const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).blame(repo, path);
+        },
+        [this, path](std::vector<repomancer::vcs::BlameLine> lines) {
+            SetStatusText(wxString::Format(
+                wxPLURAL("%zu line attributed — %s", "%zu lines attributed — %s",
+                         lines.size()),
+                lines.size(), wxString::FromUTF8(path)));
+            repomancer::gui::BlameDialog dialog(this, wxString::FromUTF8(path),
+                                                std::move(lines));
+            if (dialog.ShowModal() == wxID_OK && !dialog.SelectedHash().empty()) {
+                repomancer::gui::RepoView::Target target;
+                target.hash = wxString::FromUTF8(dialog.SelectedHash());
+                JumpToRef(target);
+            }
+        });
+}
+
+void MainFrame::OpenChangedFile(std::size_t index) {
+    if (index >= changed_files_.size()) {
+        return;
+    }
+    const auto file = repo_path_ / changed_files_[index].path;
+    std::error_code ec;
+    if (!std::filesystem::exists(file, ec) || ec) {
+        // Deleted in this commit, or never in the working tree.
+        SetStatusText(wxString::Format(_("%s does not exist in the working tree"),
+                                       wxString::FromUTF8(file.string())));
+        return;
+    }
+    if (!wxLaunchDefaultApplication(wxString::FromUTF8(file.string()))) {
+        SetStatusText(wxString::Format(_("No application could open %s"),
+                                       wxString::FromUTF8(file.string())));
+    }
+}
+
+void MainFrame::OpenContainingFolder(std::size_t index) {
+    if (index >= changed_files_.size()) {
+        return;
+    }
+    auto folder = (repo_path_ / changed_files_[index].path).parent_path();
+    std::error_code ec;
+    if (!std::filesystem::exists(folder, ec) || ec) {
+        // The directory may be gone with its contents; the repository root
+        // always exists.
+        folder = repo_path_;
+    }
+    if (!wxLaunchDefaultApplication(wxString::FromUTF8(folder.string()))) {
+        SetStatusText(wxString::Format(_("No application could open %s"),
+                                       wxString::FromUTF8(folder.string())));
+    }
+}
+
+void MainFrame::RebuildRecentMenu() {
+    if (recent_menu_ == nullptr) {
+        return;
+    }
+    while (recent_menu_->GetMenuItemCount() > 0) {
+        recent_menu_->Destroy(recent_menu_->FindItemByPosition(0));
+    }
+    if (recent_repos_.empty()) {
+        recent_menu_->Append(ID_Recent1, _("(empty)"))->Enable(false);
+        return;
+    }
+    int id = ID_Recent1;
+    for (const auto& path : recent_repos_) {
+        recent_menu_->Append(id++, wxString::FromUTF8(path));
+    }
 }
 
 void MainFrame::OnQuit(wxCommandEvent&) { Close(true); }
@@ -787,20 +1348,22 @@ void MainFrame::LoadRepository(const wxString& path) {
 
     const std::string path_utf8(path.utf8_str());
     repo_path_ = std::filesystem::path(path_utf8);
-    worker_ = std::thread([this, path_utf8] {
-        GitDriver driver;
+    worker_ = std::thread([this, path_utf8, config = git_config_] {
+        GitDriver driver(config);
         LogOptions options;
         options.max_count = 2000;
         const std::filesystem::path repo(path_utf8);
         auto result = driver.log(repo, options);
-        // The sidebar's data rides in the same worker: three more git
-        // subprocesses that must not run on the UI thread.
+        // The sidebar's data rides in the same worker: more git subprocesses
+        // that must not run on the UI thread.
+        auto status = driver.status(repo);
         auto refs = driver.refs(repo);
         auto people = driver.contributors(repo);
         auto langs = driver.languages(repo);
 
-        CallAfter([this, path_utf8, result = std::move(result), refs = std::move(refs),
-                   people = std::move(people), langs = std::move(langs)]() mutable {
+        CallAfter([this, path_utf8, result = std::move(result), status = std::move(status),
+                   refs = std::move(refs), people = std::move(people),
+                   langs = std::move(langs)]() mutable {
             busy_.store(false);
             if (!result.ok()) {
                 SetStatusText(wxString::Format(
@@ -819,12 +1382,25 @@ void MainFrame::LoadRepository(const wxString& path) {
             SetStatusText(wxString::Format(_("%zu commits — %s"), count,
                                            wxString::FromUTF8(path_utf8)));
 
-            PopulateRepoDetails(refs, people, langs);
-
             // Land on the newest commit so the detail panes have content.
             if (count > 0) {
                 log_->Select(0);
             }
+
+            // The log is the page's centre; let it paint before the sidebar
+            // and the recents bookkeeping run.
+            CallAfter([this, path_utf8, status = std::move(status),
+                       refs = std::move(refs), people = std::move(people),
+                       langs = std::move(langs)] {
+                PopulateRepoDetails(status, refs, people, langs);
+                if (recent_repos_.empty() || recent_repos_.front() != path_utf8) {
+                    auto remembered = repomancer::load_settings();
+                    repomancer::remember_recent_repo(remembered, path_utf8);
+                    repomancer::save_settings(remembered);
+                    recent_repos_ = remembered.recent_repos;
+                    RebuildRecentMenu();
+                }
+            });
         });
     });
 }

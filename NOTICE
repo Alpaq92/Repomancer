@@ -70,3 +70,10 @@ This product uses icons from Lucide (https://lucide.dev).
   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
   OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+This product bundles wxbf (third_party/wxbf), the borderless frame library
+from https://github.com/Alpaq92/wx-notepad-plus-plus, used under the
+wxWindows Library Licence, Version 3.1. The full licence text is in
+third_party/wxbf/LICENSE.txt.

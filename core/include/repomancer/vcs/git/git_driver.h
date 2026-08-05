@@ -9,10 +9,11 @@
 #pragma once
 
 #include <repomancer/process/process_runner.h>
+#include <repomancer/vcs/blame.h>
 #include <repomancer/vcs/diff.h>
+#include <repomancer/vcs/provider.h>
 #include <repomancer/vcs/refs.h>
 #include <repomancer/vcs/stats.h>
-#include <repomancer/vcs/provider.h>
 
 #include <chrono>
 #include <filesystem>
@@ -41,6 +42,42 @@ public:
     [[nodiscard]] VcsCapabilities capabilities() const override;
 
     [[nodiscard]] VcsResult<GitVersion> version() const;
+
+    // The working tree's combined (staged + unstaged) patch against HEAD,
+    // optionally scoped to one path. Untracked files produce no output.
+    [[nodiscard]] VcsResult<std::vector<FileDiff>> worktree_diff(
+        const std::filesystem::path& repo, const std::string& path = {},
+        int context_lines = 3) const;
+
+    // Stages one path (add). The path rides behind --end-of-options alone:
+    // add's grammar has no revision, so a following "--" would itself be
+    // taken as a pathspec.
+    [[nodiscard]] VcsResult<std::string> stage(const std::filesystem::path& repo,
+                                               const std::string& path) const;
+
+    // Removes one path from the index (restore --staged), same guard shape.
+    [[nodiscard]] VcsResult<std::string> unstage(const std::filesystem::path& repo,
+                                                 const std::string& path) const;
+
+    // Commits the staged changes. The message travels on stdin (--file=-),
+    // never argv (§13.1).
+    [[nodiscard]] VcsResult<std::string> commit(const std::filesystem::path& repo,
+                                                const std::string& message) const;
+
+    // Checks out `branch` (switch). Fails cleanly when the working tree is
+    // in the way; the caller surfaces git's own message.
+    [[nodiscard]] VcsResult<std::string> switch_branch(const std::filesystem::path& repo,
+                                                       const std::string& branch) const;
+
+    // Creates `branch` at HEAD; switches to it when `checkout` is set.
+    [[nodiscard]] VcsResult<std::string> create_branch(const std::filesystem::path& repo,
+                                                       const std::string& branch,
+                                                       bool checkout) const;
+
+    // Line attribution of `path` at `rev` (blame --line-porcelain).
+    [[nodiscard]] VcsResult<std::vector<BlameLine>> blame(
+        const std::filesystem::path& repo, const std::string& path,
+        const std::string& rev = "HEAD") const;
 
     [[nodiscard]] VcsResult<StatusSnapshot>
     status(const std::filesystem::path& repo) const override;

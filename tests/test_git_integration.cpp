@@ -68,7 +68,7 @@ TEST_CASE("git integration: version, status and log on the fixture repo", "[inte
     }
 
     SECTION("log returns the four commits in topological order") {
-        const auto result = driver.log(repo.path(), LogOptions{.max_count = 10, .rev = "HEAD"});
+        const auto result = driver.log(repo.path(), LogOptions{.max_count = 10, .rev = "HEAD", .path = {}});
         REQUIRE(result.ok());
         const auto& commits = result.value();
         REQUIRE(commits.size() == 4);
@@ -105,7 +105,7 @@ TEST_CASE("git integration: changed files and patches", "[integration]") {
     FixtureRepo repo;
     GitDriver driver;
 
-    const auto log = driver.log(repo.path(), LogOptions{.max_count = 10, .rev = "HEAD"});
+    const auto log = driver.log(repo.path(), LogOptions{.max_count = 10, .rev = "HEAD", .path = {}});
     REQUIRE(log.ok());
     const auto& commits = log.value();
     REQUIRE(commits.size() >= 4);
@@ -195,4 +195,136 @@ TEST_CASE("git integration: refs parse against real for-each-ref output", "[inte
     CHECK(find("main")->is_head);
     CHECK_FALSE(find("feature")->is_head);
     CHECK(find("main")->target.size() == 40);
+}
+
+TEST_CASE("git integration: a path scopes the log to the file's commits",
+          "[integration]") {
+    repomancer::test::FixtureRepo repo;
+    repomancer::vcs::git::GitDriver driver;
+
+    repomancer::vcs::LogOptions everything;
+    const auto full = driver.log(repo.path(), everything);
+    REQUIRE(full.ok());
+
+    repomancer::vcs::LogOptions scoped;
+    scoped.all_refs = false;
+    scoped.path = "a.txt";
+    const auto history = driver.log(repo.path(), scoped);
+    REQUIRE(history.ok());
+
+    REQUIRE(!history.value().empty());
+    CHECK(history.value().size() < full.value().size());
+    for (const auto& commit : history.value()) {
+        const bool known =
+            std::any_of(full.value().begin(), full.value().end(),
+                        [&](const auto& c) { return c.hash == commit.hash; });
+        CHECK(known);
+    }
+}
+
+TEST_CASE("git integration: blame attributes every line to a known commit",
+          "[integration]") {
+    repomancer::test::FixtureRepo repo;
+    repomancer::vcs::git::GitDriver driver;
+
+    const auto full = driver.log(repo.path(), {});
+    REQUIRE(full.ok());
+
+    const auto blame = driver.blame(repo.path(), "a.txt");
+    REQUIRE(blame.ok());
+    REQUIRE(!blame.value().empty());
+    for (const auto& line : blame.value()) {
+        CHECK(line.hash.size() == 40);
+        CHECK(!line.author.empty());
+        const bool known =
+            std::any_of(full.value().begin(), full.value().end(),
+                        [&](const auto& c) { return c.hash == line.hash; });
+        CHECK(known);
+    }
+}
+
+TEST_CASE("git integration: the worktree diff sees uncommitted changes",
+          "[integration]") {
+    repomancer::test::FixtureRepo repo;
+    repomancer::vcs::git::GitDriver driver;
+
+    const auto diff = driver.worktree_diff(repo.path());
+    REQUIRE(diff.ok());
+    // The fixture leaves a.txt modified unstaged and staged.txt staged.
+    const bool has_a =
+        std::any_of(diff.value().begin(), diff.value().end(),
+                    [](const auto& f) { return f.new_path == "a.txt"; });
+    CHECK(has_a);
+    CHECK(!diff.value().empty());
+}
+
+TEST_CASE("git integration: stage, unstage and commit round-trip",
+          "[integration]") {
+    repomancer::test::FixtureRepo repo;
+    repomancer::vcs::git::GitDriver driver;
+
+    const auto before = driver.log(repo.path(), {});
+    REQUIRE(before.ok());
+
+    // The fixture leaves a.txt modified but unstaged.
+    REQUIRE(driver.stage(repo.path(), "a.txt").ok());
+    auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    const auto staged_state = [&](const char* path) {
+        for (const auto& entry : status.value().entries) {
+            if (entry.path == path) {
+                return entry.x;
+            }
+        }
+        return '?';
+    };
+    CHECK(staged_state("a.txt") == 'M');
+
+    REQUIRE(driver.unstage(repo.path(), "a.txt").ok());
+    status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(staged_state("a.txt") == '.');
+
+    // Commit what the fixture already staged (staged.txt and the rename),
+    // message via stdin — including a subject that looks like an option.
+    REQUIRE(driver.stage(repo.path(), "a.txt").ok());
+    const auto commit = driver.commit(repo.path(), "--not-an-option subject\n\nbody\n");
+    if (!commit.ok()) {
+        UNSCOPED_INFO("commit error: " << commit.error().message
+                                       << " stderr: " << commit.error().stderr_excerpt);
+    }
+    REQUIRE(commit.ok());
+
+    const auto after = driver.log(repo.path(), {});
+    REQUIRE(after.ok());
+    CHECK(after.value().size() == before.value().size() + 1);
+    CHECK(after.value().front().subject == "--not-an-option subject");
+}
+
+TEST_CASE("git integration: branch switch and create", "[integration]") {
+    repomancer::test::FixtureRepo repo;
+    repomancer::vcs::git::GitDriver driver;
+
+    // The fixture leaves the tree dirty; switching between main and feature
+    // still works because the touched files do not conflict — and if git
+    // refuses, the error must be clean, not a crash.
+    const auto to_feature = driver.switch_branch(repo.path(), "feature");
+    if (to_feature.ok()) {
+        auto status = driver.status(repo.path());
+        REQUIRE(status.ok());
+        CHECK(status.value().branch.head == "feature");
+        REQUIRE(driver.switch_branch(repo.path(), "main").ok());
+    } else {
+        CHECK(!to_feature.error().message.empty());
+    }
+
+    REQUIRE(driver.create_branch(repo.path(), "topic/new", false).ok());
+    const auto refs = driver.refs(repo.path());
+    REQUIRE(refs.ok());
+    const bool created =
+        std::any_of(refs.value().begin(), refs.value().end(),
+                    [](const auto& r) { return r.short_name == "topic/new"; });
+    CHECK(created);
+
+    CHECK(!driver.switch_branch(repo.path(), "no-such-branch").ok());
 }

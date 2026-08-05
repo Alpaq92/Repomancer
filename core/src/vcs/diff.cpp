@@ -3,7 +3,7 @@
 
 #include <repomancer/vcs/diff.h>
 
-#include <charconv>
+#include "parse_util.h"
 
 namespace repomancer::vcs {
 
@@ -11,13 +11,6 @@ namespace {
 
 VcsError parse_error(std::string message) {
     return VcsError{VcsError::Kind::ParseError, std::move(message)};
-}
-
-bool parse_int(std::string_view text, int& out) {
-    const auto* begin = text.data();
-    const auto* end = begin + text.size();
-    const auto [ptr, err] = std::from_chars(begin, end, out);
-    return err == std::errc{} && ptr == end;
 }
 
 FileChange change_from_status(char status) {
@@ -104,14 +97,14 @@ bool parse_hunk_header(std::string_view line, DiffHunk& hunk) {
         if (end == std::string_view::npos) {
             return false;
         }
-        if (!parse_int(line.substr(0, end), start)) {
+        if (!parse_number(line.substr(0, end), start)) {
             return false;
         }
         count = 1; // a range without a count covers exactly one line
         if (line[end] == ',') {
             line.remove_prefix(end + 1);
             end = line.find(' ');
-            if (end == std::string_view::npos || !parse_int(line.substr(0, end), count)) {
+            if (end == std::string_view::npos || !parse_number(line.substr(0, end), count)) {
                 return false;
             }
         }
@@ -183,7 +176,7 @@ VcsResult<std::vector<ChangedFile>> parse_name_status_z(std::string_view data,
         // R and C carry a similarity score and name both paths.
         const bool has_two_paths =
             file.change == FileChange::Renamed || file.change == FileChange::Copied;
-        if (status.size() > 1 && !parse_int(status.substr(1), file.score)) {
+        if (status.size() > 1 && !parse_number(status.substr(1), file.score)) {
             return parse_error("bad rename/copy score");
         }
         if (i + 1 >= records.size()) {

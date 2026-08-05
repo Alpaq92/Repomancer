@@ -3,7 +3,7 @@
 
 #include <repomancer/vcs/git/porcelain.h>
 
-#include <charconv>
+#include "../parse_util.h"
 #include <vector>
 
 namespace repomancer::vcs::git {
@@ -44,13 +44,6 @@ bool take_tokens(std::string_view& rec, int count, std::vector<std::string_view>
     return true;
 }
 
-bool parse_int(std::string_view text, int& out) {
-    const auto* begin = text.data();
-    const auto* end = begin + text.size();
-    const auto [ptr, err] = std::from_chars(begin, end, out);
-    return err == std::errc{} && ptr == end;
-}
-
 bool parse_branch_header(std::string_view rec, BranchInfo& branch) {
     constexpr std::string_view kOid = "# branch.oid ";
     constexpr std::string_view kHead = "# branch.head ";
@@ -81,8 +74,8 @@ bool parse_branch_header(std::string_view rec, BranchInfo& branch) {
         if (ahead.empty() || behind.empty() || ahead.front() != '+' || behind.front() != '-') {
             return false;
         }
-        return parse_int(ahead.substr(1), branch.ahead) &&
-               parse_int(behind.substr(1), branch.behind);
+        return parse_number(ahead.substr(1), branch.ahead) &&
+               parse_number(behind.substr(1), branch.behind);
     }
     // Unknown headers are tolerated (forward compatibility).
     return true;
@@ -138,7 +131,7 @@ VcsResult<StatusSnapshot> parse_status_porcelain_v2z(std::string_view data,
             entry.y = tokens[1][1];
             entry.submodule = std::string(tokens[2]);
             std::string_view score = tokens[8];
-            if (score.size() < 2 || !parse_int(score.substr(1), entry.rename_score)) {
+            if (score.size() < 2 || !parse_number(score.substr(1), entry.rename_score)) {
                 return parse_error("malformed rename score");
             }
             entry.path = std::string(rec);

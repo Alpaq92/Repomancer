@@ -4,6 +4,8 @@
 #pragma once
 
 #include "diff_view.h"
+#include "text_sanitize.h"
+#include "title_bar.h"
 #include "graph_renderer.h"
 #include "log_view.h"
 #include "pane_header.h"
@@ -11,10 +13,20 @@
 #include "log_model.h"
 
 #include <wx/aui/aui.h>
+#include <wx/dataview.h>
+
+#ifdef REPOMANCER_HAVE_WXBF
+#include <wxbf/borderless_frame.h>
+// The integrated top bar rides on wxbf's borderless frame (Windows/Linux);
+// macOS keeps the native frame and menu bar.
+using MainFrameBase = wxBorderlessFrame;
+#else
+using MainFrameBase = wxFrame;
+#endif
 #include <wx/frame.h>
-#include <wx/listctrl.h>
 #include <wx/stc/stc.h>
 
+#include <repomancer/vcs/git/git_driver.h>
 #include <repomancer/vcs/refs.h>
 #include <repomancer/vcs/stats.h>
 
@@ -25,7 +37,7 @@
 #include <thread>
 #include <vector>
 
-class MainFrame : public wxFrame {
+class MainFrame : public MainFrameBase {
 public:
     MainFrame();
     ~MainFrame() override;
@@ -40,7 +52,20 @@ private:
     void OnQuit(wxCommandEvent& event);
     void OnAbout(wxCommandEvent& event);
     void ShowCommit(int row);
-    void OnFileSelected(wxListEvent& event);
+    void ReloadRepository();
+    void AppendFileRow(const wxString& change, const std::string& path,
+                       const std::string& old_path);
+    void OnPreferences(wxCommandEvent& event);
+    void RebuildRecentMenu();
+    // Fetches and shows the history of the changed file at `index`.
+    void ShowFileHistory(std::size_t index);
+    void ShowFileBlame(std::size_t index);
+    // Opens the working-tree copy of the changed file with the system's
+    // default application.
+    void OpenChangedFile(std::size_t index);
+    // Opens the file's directory in the system file manager.
+    void OpenContainingFolder(std::size_t index);
+    void OnFileSelected(wxDataViewEvent& event);
 
     void LoadRepository(const wxString& path);
     void ShowFileDiff(long index);
@@ -48,8 +73,40 @@ private:
     // Re-reads system colours into everything that caches them.
     void ApplyThemeToWidgets();
     // Relaunches the application so a new theme actually takes effect.
-    void RestartForTheme();
+    void RestartToApplySettings();
+    // One-shot git operation off the UI thread: runs `op` against the
+    // repository with the configured binary, then `done` with the value on
+    // the UI thread; failures land in the status bar with git's own words.
+    // Serialized on op_worker_ — the join/queue policy lives here alone.
+    template <typename Op, typename Done>
+    void RunGitOp(wxString failure_prefix, Op op, Done done) {
+        if (op_worker_.joinable()) {
+            op_worker_.join();
+        }
+        op_worker_ = std::thread([this, failure_prefix = std::move(failure_prefix),
+                                  op = std::move(op), done = std::move(done),
+                                  repo = repo_path_, config = git_config_]() mutable {
+            auto result = op(repo, config);
+            CallAfter([this, failure_prefix = std::move(failure_prefix),
+                       result = std::move(result), done = std::move(done)]() mutable {
+                if (!result.ok()) {
+                    SetStatusText(failure_prefix +
+                                  repomancer::gui::error_text(result.error()));
+                    return;
+                }
+                done(std::move(result).value());
+            });
+        });
+    }
+
+    void ShowWorktree();
+    void StageWorktreeFile(std::size_t index, bool stage);
+    void CommitStaged();
+    void OnBranchMenu(const wxString& branch);
+    void SwitchBranch(const std::string& branch);
+    void CreateBranch(const std::string& branch);
     void PopulateRepoDetails(
+        const repomancer::vcs::VcsResult<repomancer::vcs::StatusSnapshot>& status,
         const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Ref>>& refs,
         const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Contributor>>&
             people,
@@ -72,18 +129,31 @@ private:
     wxSizerItem* log_margin_ = nullptr;
     wxPanel* details_panel_ = nullptr;
     repomancer::gui::RepoView* repo_view_ = nullptr;
-    wxListCtrl* files_ = nullptr;
+    wxDataViewListCtrl* files_ = nullptr;
     repomancer::gui::DiffView* diff_ = nullptr;
     std::unique_ptr<CommitLogModel> model_;
+    // Owned menus when there is no wxMenuBar (integrated title bar mode).
+    std::unique_ptr<wxMenu> file_menu_owned_;
+    std::unique_ptr<wxMenu> view_menu_owned_;
+    std::unique_ptr<wxMenu> help_menu_owned_;
+    wxMenu* recent_menu_ = nullptr; // owned by the File menu
+    std::vector<std::string> recent_repos_; // mirrors settings; UI reads this
+    // Which git to run, resolved from Preferences → VCS Providers.
+    repomancer::vcs::git::GitConfig git_config_;
     std::filesystem::path repo_path_;
     std::string selected_commit_;
     std::vector<repomancer::vcs::ChangedFile> changed_files_;
+    // The files pane shows the working tree instead of a commit's files.
+    bool worktree_mode_ = false;
+    std::vector<repomancer::vcs::StatusEntry> worktree_entries_;
+    std::string current_branch_;
     std::thread worker_;
     std::atomic<bool> busy_{false};
     // Selection details are fetched off the UI thread; the generation numbers
     // let a newer selection silently drop results that arrive for an older one.
     std::thread files_worker_;
     std::thread diff_worker_;
+    std::thread op_worker_;
     std::atomic<unsigned> files_generation_{0};
     std::atomic<unsigned> diff_generation_{0};
 };

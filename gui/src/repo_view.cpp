@@ -46,6 +46,14 @@ public:
         SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
         Bind(wxEVT_PAINT, &DetailsCanvas::OnPaint, this);
         Bind(wxEVT_LEFT_DOWN, &DetailsCanvas::OnLeftDown, this);
+        Bind(wxEVT_RIGHT_DOWN, [this](wxMouseEvent& event) {
+            const wxPoint point = CalcUnscrolledPosition(event.GetPosition());
+            const int index = RowIndexAt(point.y);
+            if (index >= 0 && rows_[static_cast<std::size_t>(index)].branch &&
+                on_branch_menu_) {
+                on_branch_menu_(rows_[static_cast<std::size_t>(index)].target.name);
+            }
+        });
         Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
             event.Skip();
             Refresh(); // the bar spans the client width
@@ -61,6 +69,10 @@ public:
 
     void SetOnActivate(std::function<void(const RepoView::Target&)> handler) {
         on_activate_ = std::move(handler);
+    }
+
+    void SetOnBranchMenu(std::function<void(const wxString&)> handler) {
+        on_branch_menu_ = std::move(handler);
     }
 
 private:
@@ -133,7 +145,7 @@ private:
             }
             const int y = offsets_[i];
             const RepoView::Row& row = rows_[i];
-            const int height = RowHeight(dc, row); // sets the row's font
+            RowHeight(dc, row); // called for its side effect: the row's font
             if (!row.bar.empty()) {
                 DrawBar(dc, row, kPadding, y, width - 2 * kPadding);
                 continue;
@@ -218,6 +230,7 @@ private:
     std::vector<int> offsets_; // unscrolled y of each row, plus the end
     int selected_row_ = -1;
     std::function<void(const RepoView::Target&)> on_activate_;
+    std::function<void(const wxString&)> on_branch_menu_;
 };
 
 RepoView::RepoView(wxWindow* parent) : wxPanel(parent) {
@@ -233,6 +246,10 @@ void RepoView::SetRows(std::vector<Row> rows) { canvas_->SetRows(std::move(rows)
 
 void RepoView::SetOnActivate(std::function<void(const Target&)> handler) {
     canvas_->SetOnActivate(std::move(handler));
+}
+
+void RepoView::SetOnBranchMenu(std::function<void(const wxString&)> handler) {
+    canvas_->SetOnBranchMenu(std::move(handler));
 }
 
 wxWindow* RepoView::canvas() const { return canvas_; }

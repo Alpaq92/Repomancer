@@ -186,6 +186,7 @@ process) / Shell (compute in-extension, blocking) / None*, plus drive-type check
 | Repo/branch/remote/tag/stash managers, sync dialog with streamed progress | standard wx dialogs + core streaming | ✅ |
 | Theme | **Light / Dark / System selection** (user requirement 2026-08-04), persisted in settings.json; View ▸ Theme now, Preferences page later | ✅ wx ≥ 3.3: `wxApp::SetAppearance()` — one consistent API on MSW/GTK/macOS (runtime switch on MSW needs 3.3.3+, else restart prompt; apply before first window). wx 3.2 dev fallback: live GTK `gtk-application-prefer-dark-theme` toggle (initial value captured for System restore); unsupported on 3.2 MSW/mac (releases pin 3.3). QA per milestone — MSW dark is fresh upstream |
 | HiDPI/icons | **SVG via wxBitmapBundle**; icon pack: **Lucide** (ISC, attributed in NOTICE) | ✅ |
+| Integrated title bar | **wxbf** (vendored, wxWindows Licence 3.1) borderless frame + app-drawn caption buttons on Windows/Linux; native frame on macOS | ✅ M1 |
 | i18n | see §4.3 | ✅ wxTranslations + gettext from M1 (strings externalized day one) |
 | Keyboard-first flow | full accelerator map, command palette (later) | ✅ accelerators from M1 |
 

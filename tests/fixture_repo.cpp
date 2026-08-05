@@ -76,6 +76,12 @@ FixtureRepo::FixtureRepo() : dir_(make_temp_dir()) {
     // -c commit.gpgsign=false on every commit/merge: a developer's global
     // config must not break fixture determinism.
     git({"init", "-q", "-b", "main"});
+    // Repo-local identity and signing config: the driver's own commit runs
+    // without the fixture's env injection, exactly like a user's git would,
+    // and must neither prompt for identity nor try to sign.
+    git({"config", "user.name", kAuthorName});
+    git({"config", "user.email", kAuthorEmail});
+    git({"config", "commit.gpgsign", "false"});
 
     write_file("a.txt", "alpha\n");
     git({"add", "a.txt"});

@@ -28,9 +28,16 @@ public:
     // that object is not in the log — an annotated tag's id is the tag
     // object, not the commit it marks.
     struct Target {
+        // What activating the row means. Ref jumps the log; Worktree opens
+        // the working-tree view — typed, so no ref name (all of which are
+        // legal branch names) can collide with an in-band sentinel.
+        enum class Kind { Ref, Worktree };
+        Kind kind = Kind::Ref;
         wxString hash;
         wxString name;
-        [[nodiscard]] bool empty() const { return hash.empty() && name.empty(); }
+        [[nodiscard]] bool empty() const {
+            return kind == Kind::Ref && hash.empty() && name.empty();
+        }
     };
 
     // One row of the details block. A row is plain text, a heading, a legend
@@ -40,6 +47,7 @@ public:
         wxString text;
         Target target;
         bool heading = false;
+        bool branch = false; // a local branch: right-click offers actions
         bool dot = false;
         wxColour colour;
         std::vector<std::pair<wxColour, double>> bar; // colour and percent
@@ -51,6 +59,9 @@ public:
     void SetRows(std::vector<Row> rows);
 
     void SetOnActivate(std::function<void(const Target&)> handler);
+
+    // Right-click on a local-branch row; receives the branch name.
+    void SetOnBranchMenu(std::function<void(const wxString&)> handler);
 
     // The scrolled content, for theme colours.
     [[nodiscard]] wxWindow* canvas() const;

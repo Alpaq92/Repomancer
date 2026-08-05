@@ -83,11 +83,14 @@ protected:
     explicit PaneHeader(wxWindow* parent)
         : wxDataViewListCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                              wxBORDER_NONE) {
-        // Every header strip clamps itself to its own native header height on
-        // first paint — by then the widget is realized and the measure is
-        // real. All strips are the same widget with the same font, so they
-        // all land on the same height without any external synchronising.
-        Bind(wxEVT_PAINT, [this](wxPaintEvent& event) {
+        // Every header strip clamps itself to its own native header height.
+        // Paint events never arrive for native widgets on GTK, so the clamp
+        // is queued for after realization and repeated on size changes —
+        // both delivered reliably, and the clamp is idempotent. All strips
+        // are the same widget with the same font, so they all land on the
+        // same height without any external synchronising.
+        CallAfter([this] { ClampToNativeHeader(); });
+        Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
             event.Skip();
             ClampToNativeHeader();
         });

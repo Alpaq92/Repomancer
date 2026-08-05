@@ -4,7 +4,7 @@
 #include <repomancer/vcs/stats.h>
 
 #include <algorithm>
-#include <charconv>
+#include "parse_util.h"
 #include <unordered_map>
 
 namespace repomancer::vcs {
@@ -65,9 +65,7 @@ VcsResult<std::vector<Contributor>> parse_shortlog(std::string_view data,
         }
         Contributor contributor;
         const std::string_view count = trim(line.substr(0, tab));
-        const auto* begin = count.data();
-        const auto* end = begin + count.size();
-        if (std::from_chars(begin, end, contributor.commits).ec != std::errc{}) {
+        if (!parse_number(count, contributor.commits)) {
             return VcsError{VcsError::Kind::ParseError, "shortlog count is not a number"};
         }
 
@@ -185,9 +183,7 @@ VcsResult<std::vector<LanguageStat>> parse_ls_tree_sizes(std::string_view data,
             continue; // submodule or tree, which has no size of its own
         }
         std::uint64_t size = 0;
-        const auto* begin = size_text.data();
-        const auto* end = begin + size_text.size();
-        if (std::from_chars(begin, end, size).ec != std::errc{}) {
+        if (!parse_number(size_text, size)) {
             return VcsError{VcsError::Kind::ParseError, "tree entry size is not a number"};
         }
 

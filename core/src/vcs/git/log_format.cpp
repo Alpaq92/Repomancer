@@ -4,7 +4,7 @@
 #include <repomancer/vcs/git/log_format.h>
 
 #include <array>
-#include <charconv>
+#include "../parse_util.h"
 
 namespace repomancer::vcs::git {
 
@@ -14,13 +14,6 @@ constexpr std::array<std::string_view, 11> kFields = {
     "%H", "%P", "%at", "%an", "%ae", "%ct", "%cn", "%ce", "%D", "%s", "%b",
 };
 constexpr std::size_t kFixedFieldCount = kFields.size() - 1; // %b is the remainder
-
-bool parse_i64(std::string_view text, std::int64_t& out) {
-    const auto* begin = text.data();
-    const auto* end = begin + text.size();
-    const auto [ptr, err] = std::from_chars(begin, end, out);
-    return err == std::errc{} && ptr == end;
-}
 
 std::vector<std::string> split_ws(std::string_view text) {
     std::vector<std::string> parts;
@@ -63,12 +56,19 @@ std::vector<std::string> build_log_args(const LogOptions& options) {
     if (options.all_refs) {
         args.emplace_back("--all");
     }
+    if (!options.path.empty()) {
+        // One path, renames followed — the shape `--follow` requires.
+        args.emplace_back("--follow");
+    }
     // §13.1: nothing after this point is ever parsed as an option.
     args.emplace_back("--end-of-options");
     if (!options.all_refs) {
         args.push_back(options.rev);
     }
     args.emplace_back("--");
+    if (!options.path.empty()) {
+        args.push_back(options.path);
+    }
     return args;
 }
 
@@ -115,12 +115,12 @@ VcsResult<std::vector<Commit>> parse_log_z(std::string_view data, const ParseLim
         Commit commit;
         commit.hash = std::string(fields[0]);
         commit.parents = split_ws(fields[1]);
-        if (!parse_i64(fields[2], commit.author_time)) {
+        if (!parse_number(fields[2], commit.author_time)) {
             return VcsError{VcsError::Kind::ParseError, "bad author timestamp"};
         }
         commit.author_name = std::string(fields[3]);
         commit.author_email = std::string(fields[4]);
-        if (!parse_i64(fields[5], commit.commit_time)) {
+        if (!parse_number(fields[5], commit.commit_time)) {
             return VcsError{VcsError::Kind::ParseError, "bad committer timestamp"};
         }
         commit.committer_name = std::string(fields[6]);

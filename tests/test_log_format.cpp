@@ -130,3 +130,22 @@ TEST_CASE("log parse: limits enforced") {
     REQUIRE_FALSE(result.ok());
     CHECK(result.error().kind == VcsError::Kind::LimitExceeded);
 }
+
+TEST_CASE("log args: a path scopes the log and follows renames") {
+    repomancer::vcs::LogOptions options;
+    options.all_refs = false;
+    options.path = "src/--evil.txt";
+    const auto args = repomancer::vcs::git::build_log_args(options);
+
+    const auto follow = std::find(args.begin(), args.end(), "--follow");
+    const auto separator = std::find(args.begin(), args.end(), "--");
+    const auto end_of_options = std::find(args.begin(), args.end(), "--end-of-options");
+    REQUIRE(follow != args.end());
+    REQUIRE(separator != args.end());
+    REQUIRE(end_of_options != args.end());
+    // The option before the guard, the path after the separator — a path
+    // that looks like an option must never be parsed as one.
+    CHECK(follow < end_of_options);
+    CHECK(args.back() == "src/--evil.txt");
+    CHECK(separator < args.end() - 1);
+}

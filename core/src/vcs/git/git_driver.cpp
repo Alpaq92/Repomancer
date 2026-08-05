@@ -36,6 +36,13 @@ VcsError from_run_failure(const proc::RunResult& run) {
     return {Kind::NonZeroExit, "git exited with an error", run.exit_code, excerpt(run.err)};
 }
 
+VcsResult<std::string> run_to_string(const proc::RunResult& run) {
+    if (!run.ok()) {
+        return from_run_failure(run);
+    }
+    return run.out;
+}
+
 } // namespace
 
 GitDriver::GitDriver(GitConfig config) : config_(std::move(config)) {}
@@ -179,6 +186,76 @@ VcsResult<std::vector<FileDiff>> GitDriver::file_diff(const std::filesystem::pat
         return from_run_failure(run);
     }
     return parse_unified_diff(run.out, config_.limits);
+}
+
+VcsResult<std::string> GitDriver::stage(const std::filesystem::path& repo,
+                                        const std::string& path) const {
+    return run_to_string(
+        proc::ProcessRunner::run(make_spec(&repo, {"add", "--end-of-options", path})));
+}
+
+VcsResult<std::string> GitDriver::unstage(const std::filesystem::path& repo,
+                                          const std::string& path) const {
+    return run_to_string(proc::ProcessRunner::run(
+        make_spec(&repo, {"restore", "--staged", "--end-of-options", path})));
+}
+
+VcsResult<std::string> GitDriver::commit(const std::filesystem::path& repo,
+                                         const std::string& message) const {
+    auto spec = make_spec(&repo, {"commit", "--file=-"});
+    spec.stdin_data = message;
+    return run_to_string(proc::ProcessRunner::run(spec));
+}
+
+VcsResult<std::string> GitDriver::switch_branch(const std::filesystem::path& repo,
+                                                const std::string& branch) const {
+    return run_to_string(proc::ProcessRunner::run(
+        make_spec(&repo, {"switch", "--end-of-options", branch})));
+}
+
+VcsResult<std::string> GitDriver::create_branch(const std::filesystem::path& repo,
+                                                const std::string& branch,
+                                                bool checkout) const {
+    if (checkout) {
+        return run_to_string(proc::ProcessRunner::run(
+            make_spec(&repo, {"switch", "-c", "--end-of-options", branch})));
+    }
+    return run_to_string(proc::ProcessRunner::run(
+        make_spec(&repo, {"branch", "--end-of-options", branch})));
+}
+
+VcsResult<std::vector<FileDiff>> GitDriver::worktree_diff(const std::filesystem::path& repo,
+                                                          const std::string& path,
+                                                          int context_lines) const {
+    std::vector<std::string> args = {"diff",
+                                     "--no-color",
+                                     "--unified=" + std::to_string(context_lines),
+                                     "--find-renames",
+                                     "--end-of-options",
+                                     "HEAD",
+                                     "--"};
+    if (!path.empty()) {
+        args.push_back(path);
+    }
+    const auto run = proc::ProcessRunner::run(make_spec(&repo, std::move(args)));
+    if (!run.ok()) {
+        return from_run_failure(run);
+    }
+    return parse_unified_diff(run.out, config_.limits);
+}
+
+VcsResult<std::vector<BlameLine>> GitDriver::blame(const std::filesystem::path& repo,
+                                                   const std::string& path,
+                                                   const std::string& rev) const {
+    // No --end-of-options here: blame's rev/pathspec grammar rejects it
+    // ("bad revision" for the path). The rev is always program-controlled,
+    // and the "--" keeps the attacker-influenced path out of option space.
+    const auto run = proc::ProcessRunner::run(
+        make_spec(&repo, {"blame", "--line-porcelain", rev, "--", path}));
+    if (!run.ok()) {
+        return from_run_failure(run);
+    }
+    return parse_blame_line_porcelain(run.out, config_.limits);
 }
 
 VcsResult<std::vector<Commit>> GitDriver::log(const std::filesystem::path& repo,

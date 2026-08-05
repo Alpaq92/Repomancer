@@ -11,6 +11,12 @@
 
 namespace repomancer::gui {
 
+wxColour blend_colour(const wxColour& a, const wxColour& b, int pct) {
+    return wxColour((a.Red() * pct + b.Red() * (100 - pct)) / 100,
+                    (a.Green() * pct + b.Green() * (100 - pct)) / 100,
+                    (a.Blue() * pct + b.Blue() * (100 - pct)) / 100);
+}
+
 ThemeMode theme_mode_from_string(std::string_view value) {
     if (value == "light") {
         return ThemeMode::Light;

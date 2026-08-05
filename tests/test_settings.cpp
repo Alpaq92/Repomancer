@@ -40,8 +40,26 @@ TEST_CASE("settings: round-trip") {
     TempDir tmp;
     Settings settings;
     settings.theme = "dark";
+    settings.git_binary = "/opt/git/bin/git";
+    settings.integrated_titlebar = false;
     REQUIRE(save_settings(settings, tmp.dir));
-    CHECK(load_settings(tmp.dir).theme == "dark");
+    const auto loaded = load_settings(tmp.dir);
+    CHECK(loaded.theme == "dark");
+    CHECK(loaded.git_binary == "/opt/git/bin/git");
+    CHECK(loaded.integrated_titlebar == false);
+
+    settings.topbar_buttons = 2;
+    settings.topbar_sharp_corners = true;
+    REQUIRE(save_settings(settings, tmp.dir));
+    CHECK(load_settings(tmp.dir).topbar_buttons == 2);
+    CHECK(load_settings(tmp.dir).topbar_sharp_corners == true);
+}
+
+TEST_CASE("settings: empty git binary degrades to the default") {
+    TempDir tmp;
+    std::filesystem::create_directories(tmp.dir);
+    std::ofstream(tmp.dir / "settings.json") << R"({"git_binary": ""})";
+    CHECK(load_settings(tmp.dir).git_binary == "git");
 }
 
 TEST_CASE("settings: corrupt or invalid content degrades to defaults") {
@@ -66,4 +84,18 @@ TEST_CASE("settings: corrupt or invalid content degrades to defaults") {
         out.close();
         CHECK(load_settings(tmp.dir).theme == "system");
     }
+}
+
+TEST_CASE("settings: recent repositories dedupe, cap and round-trip") {
+    TempDir tmp;
+    Settings settings;
+    for (int i = 0; i < 12; ++i) {
+        repomancer::remember_recent_repo(settings, "/repo/" + std::to_string(i));
+    }
+    repomancer::remember_recent_repo(settings, "/repo/5"); // moves to front
+    CHECK(settings.recent_repos.size() == 8);
+    CHECK(settings.recent_repos.front() == "/repo/5");
+
+    REQUIRE(save_settings(settings, tmp.dir));
+    CHECK(load_settings(tmp.dir).recent_repos == settings.recent_repos);
 }

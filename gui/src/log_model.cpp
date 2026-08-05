@@ -3,33 +3,18 @@
 
 #include "log_model.h"
 
+#include "text_sanitize.h"
+
 #include <wx/datetime.h>
 
 namespace {
-
-// Display sanitization (§13.1): commit data is attacker-influenced; C0
-// control characters must never reach a text control verbatim.
-wxString sanitized_utf8(const std::string& raw) {
-    std::string clean;
-    clean.reserve(raw.size());
-    for (const char ch : raw) {
-        clean.push_back((static_cast<unsigned char>(ch) < 0x20) ? ' ' : ch);
-    }
-    wxString out = wxString::FromUTF8(clean.data(), clean.size());
-    if (out.empty() && !clean.empty()) {
-        // Invalid UTF-8: fall back to a lossy latin-1 view rather than
-        // showing nothing.
-        out = wxString::From8BitData(clean.data(), clean.size());
-    }
-    return out;
-}
 
 // "HEAD -> main, tag: v1, origin/main" → "main | v1 | origin/main"
 wxString format_refs(const std::string& raw) {
     if (raw.empty()) {
         return {};
     }
-    wxString text = sanitized_utf8(raw);
+    wxString text = repomancer::gui::sanitized_utf8(raw);
     text.Replace("HEAD -> ", "");
     text.Replace("tag: ", "");
     text.Replace(", ", " | ");
@@ -47,9 +32,9 @@ void CommitLogModel::ReplaceAll(std::vector<repomancer::vcs::Commit> commits) {
     for (const auto& commit : commits_) {
         const wxString refs = format_refs(commit.refs);
         const wxDateTime when(static_cast<time_t>(commit.commit_time));
-        display_.push_back({refs.empty() ? sanitized_utf8(commit.subject)
-                                         : "[" + refs + "] " + sanitized_utf8(commit.subject),
-                            sanitized_utf8(commit.author_name),
+        display_.push_back({refs.empty() ? repomancer::gui::sanitized_utf8(commit.subject)
+                                         : "[" + refs + "] " + repomancer::gui::sanitized_utf8(commit.subject),
+                            repomancer::gui::sanitized_utf8(commit.author_name),
                             when.Format("%Y-%m-%d %H:%M"),
                             wxString::FromUTF8(commit.hash.substr(0, 10))});
     }
