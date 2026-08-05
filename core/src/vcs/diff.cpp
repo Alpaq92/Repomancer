@@ -50,7 +50,11 @@ std::vector<std::string_view> split_z(std::string_view data) {
     return records;
 }
 
-// One line of the patch, without its terminator.
+// One line of the patch, without its LF terminator. A trailing CR is KEPT:
+// for CRLF blobs the CR is part of the line's bytes, and hunk staging
+// re-serializes DiffLine.text byte-faithfully — stripping it here would emit
+// patches whose preimage never matches the file. Header lines strip it
+// themselves via strip_cr.
 std::string_view next_line(std::string_view& data) {
     std::size_t eol = data.find('\n');
     if (eol == std::string_view::npos) {
@@ -58,8 +62,12 @@ std::string_view next_line(std::string_view& data) {
         data = {};
         return line;
     }
-    std::string_view line = data.substr(0, eol);
+    const std::string_view line = data.substr(0, eol);
     data.remove_prefix(eol + 1);
+    return line;
+}
+
+std::string_view strip_cr(std::string_view line) {
     if (!line.empty() && line.back() == '\r') {
         line.remove_suffix(1);
     }
@@ -233,13 +241,18 @@ VcsResult<std::vector<FileDiff>> parse_unified_diff(std::string_view data,
             return VcsError{VcsError::Kind::LimitExceeded, "too many files in diff"};
         }
 
-        if (line.substr(0, 4) == "--- ") {
-            current.old_path = strip_diff_prefix(line.substr(4));
-            continue;
-        }
-        if (line.substr(0, 4) == "+++ ") {
-            current.new_path = strip_diff_prefix(line.substr(4));
-            continue;
+        // The ---/+++ header forms are only headers before the file's first
+        // hunk. Inside a hunk body they are ordinary content: a removed line
+        // "-- drop index" (SQL, Lua, Haskell) serializes as "--- drop index".
+        if (current.hunks.empty()) {
+            if (line.substr(0, 4) == "--- ") {
+                current.old_path = strip_diff_prefix(strip_cr(line.substr(4)));
+                continue;
+            }
+            if (line.substr(0, 4) == "+++ ") {
+                current.new_path = strip_diff_prefix(strip_cr(line.substr(4)));
+                continue;
+            }
         }
         if (line.substr(0, 7) == "Binary " || line.substr(0, 21) == "GIT binary patch") {
             current.is_binary = true;
@@ -247,7 +260,7 @@ VcsResult<std::vector<FileDiff>> parse_unified_diff(std::string_view data,
         }
         if (line.substr(0, 2) == "@@") {
             DiffHunk hunk;
-            if (!parse_hunk_header(line, hunk)) {
+            if (!parse_hunk_header(strip_cr(line), hunk)) {
                 return parse_error("malformed hunk header");
             }
             old_lineno = hunk.old_start;
@@ -277,7 +290,7 @@ VcsResult<std::vector<FileDiff>> parse_unified_diff(std::string_view data,
             break;
         case '\\':
             entry.kind = DiffLineKind::NoNewline;
-            break;
+            break; // text set below keeps the raw bytes
         case ' ':
             entry.kind = DiffLineKind::Context;
             entry.old_lineno = old_lineno++;

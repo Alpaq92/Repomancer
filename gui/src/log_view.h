@@ -45,6 +45,10 @@ public:
 
     void SetOnSelect(std::function<void(int)> handler);
 
+    // Right-click: the row is selected first, then the handler runs (for a
+    // popup acting on that commit).
+    void SetOnContextMenu(std::function<void(int)> handler);
+
     [[nodiscard]] wxWindow* canvas() const;
 
 private:

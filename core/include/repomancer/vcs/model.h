@@ -22,6 +22,7 @@ struct VcsError {
         Cancelled,
         ParseError,    // tool output did not match the machine format
         LimitExceeded, // §13.2 parser limits tripped
+        UntrustedRepo, // §13.1 trust gate: mutation refused in read-only mode
     };
 
     VcsError() = default;

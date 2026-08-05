@@ -18,6 +18,10 @@ namespace repomancer {
 // Most-recently-opened repositories kept in settings (and shown in the menu).
 inline constexpr std::size_t kMaxRecentRepos = 8;
 
+// Trust-store bound: oldest decisions are evicted first, and the total stays
+// far under the settings-file size cap.
+inline constexpr std::size_t kMaxTrustedRepos = 256;
+
 struct Settings {
     // "system" | "light" | "dark"
     std::string theme = "system";
@@ -37,7 +41,15 @@ struct Settings {
     bool topbar_sharp_corners = false;
     // Most recently opened repositories, newest first, capped at eight.
     std::vector<std::string> recent_repos; // newest first, kMaxRecentRepos long
+    std::vector<std::string> trusted_repos; // canonical paths the user vouched for
 };
+
+// §13.1 trust store: repositories the user has vouched for, by canonical
+// absolute path. Everything else opens read-only until trusted.
+[[nodiscard]] bool is_repo_trusted(const Settings& settings, const std::string& path);
+
+// Adds `path` to the trust store (idempotent).
+void remember_trusted_repo(Settings& settings, const std::string& path);
 
 // Puts `path` at the front of `settings.recent_repos`, deduplicated, capped.
 void remember_recent_repo(Settings& settings, const std::string& path);

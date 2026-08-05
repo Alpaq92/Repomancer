@@ -7,6 +7,7 @@ add_library(repomancer-core STATIC
   src/vcs/branch_model.cpp
   src/vcs/blame.cpp
   src/vcs/diff.cpp
+  src/vcs/patch.cpp
   src/vcs/refs.cpp
   src/vcs/stats.cpp
   src/vcs/git/porcelain.cpp

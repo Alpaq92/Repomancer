@@ -139,6 +139,93 @@ inline constexpr const char* kSquareArrowRightEnter = R"svg(<svg
   <path d="M3 8V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3" />
 </svg>)svg";
 
+// lucide "hash"
+inline constexpr const char* kHash = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <line x1="4" x2="20" y1="9" y2="9" />
+  <line x1="4" x2="20" y1="15" y2="15" />
+  <line x1="10" x2="8" y1="3" y2="21" />
+  <line x1="16" x2="14" y1="3" y2="21" />
+</svg>)svg";
+
+// lucide "file-type-corner"
+inline constexpr const char* kFileTypeCorner = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M12 22h6a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v6" />
+  <path d="M14 2v5a1 1 0 0 0 1 1h5" />
+  <path d="M3 16v-1.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5V16" />
+  <path d="M6 22h2" />
+  <path d="M7 14v8" />
+</svg>)svg";
+
+// lucide "tag"
+inline constexpr const char* kTag = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
+  <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+</svg>)svg";
+
+// lucide "arrow-down-to-line"
+inline constexpr const char* kArrowDownToLine = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M12 17V3" />
+  <path d="m6 11 6 6 6-6" />
+  <path d="M19 21H5" />
+</svg>)svg";
+
+// lucide "arrow-down"
+inline constexpr const char* kArrowDown = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M12 5v14" />
+  <path d="m19 12-7 7-7-7" />
+</svg>)svg";
+
+// lucide "arrow-up"
+inline constexpr const char* kArrowUp = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="m5 12 7-7 7 7" />
+  <path d="M12 19V5" />
+</svg>)svg";
+
+// lucide "layers-2"
+inline constexpr const char* kLayers2 = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M13 13.74a2 2 0 0 1-2 0L2.5 8.87a1 1 0 0 1 0-1.74L11 2.26a2 2 0 0 1 2 0l8.5 4.87a1 1 0 0 1 0 1.74z" />
+  <path d="m20 14.285 1.5.845a1 1 0 0 1 0 1.74L13 21.74a2 2 0 0 1-2 0l-8.5-4.87a1 1 0 0 1 0-1.74l1.5-.845" />
+</svg>)svg";
+
+// lucide "undo-2"
+inline constexpr const char* kUndo2 = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M9 14 4 9l5-5" />
+  <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
+</svg>)svg";
+
+// lucide "shield-check"
+inline constexpr const char* kShieldCheck = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+  <path d="m9 12 2 2 4-4" />
+</svg>)svg";
+
 // lucide "git-branch-plus"
 inline constexpr const char* kGitBranchPlus = R"svg(<svg
   xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"

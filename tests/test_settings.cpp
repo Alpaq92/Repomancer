@@ -80,7 +80,7 @@ TEST_CASE("settings: corrupt or invalid content degrades to defaults") {
     }
     SECTION("oversized file is refused") {
         std::ofstream out(tmp.dir / "settings.json");
-        out << R"({"theme":"dark","pad":")" << std::string(70 * 1024, 'x') << R"("})";
+        out << R"({"theme":"dark","pad":")" << std::string(300 * 1024, 'x') << R"("})";
         out.close();
         CHECK(load_settings(tmp.dir).theme == "system");
     }
@@ -98,4 +98,38 @@ TEST_CASE("settings: recent repositories dedupe, cap and round-trip") {
 
     REQUIRE(save_settings(settings, tmp.dir));
     CHECK(load_settings(tmp.dir).recent_repos == settings.recent_repos);
+}
+
+TEST_CASE("settings: trust store is idempotent and round-trips") {
+    TempDir tmp;
+    Settings settings;
+    CHECK(!repomancer::is_repo_trusted(settings, "/home/u/repo"));
+    repomancer::remember_trusted_repo(settings, "/home/u/repo");
+    repomancer::remember_trusted_repo(settings, "/home/u/repo"); // no dupe
+    repomancer::remember_trusted_repo(settings, "");              // ignored
+    CHECK(settings.trusted_repos.size() == 1);
+    CHECK(repomancer::is_repo_trusted(settings, "/home/u/repo"));
+    CHECK(!repomancer::is_repo_trusted(settings, "/home/u/repo2"));
+
+    REQUIRE(save_settings(settings, tmp.dir));
+    const auto loaded = load_settings(tmp.dir);
+    CHECK(loaded.trusted_repos == settings.trusted_repos);
+    CHECK(repomancer::is_repo_trusted(loaded, "/home/u/repo"));
+}
+
+TEST_CASE("settings: trust store evicts the oldest, newest always survives") {
+    TempDir tmp;
+    Settings settings;
+    for (std::size_t i = 0; i < repomancer::kMaxTrustedRepos + 10; ++i) {
+        repomancer::remember_trusted_repo(settings, "/r/" + std::to_string(i));
+    }
+    CHECK(settings.trusted_repos.size() == repomancer::kMaxTrustedRepos);
+    CHECK(!repomancer::is_repo_trusted(settings, "/r/0")); // oldest gone
+    const std::string newest =
+        "/r/" + std::to_string(repomancer::kMaxTrustedRepos + 9);
+    CHECK(repomancer::is_repo_trusted(settings, newest));
+
+    // And the newest survives a save/load round-trip, even at the cap.
+    REQUIRE(save_settings(settings, tmp.dir));
+    CHECK(repomancer::is_repo_trusted(load_settings(tmp.dir), newest));
 }

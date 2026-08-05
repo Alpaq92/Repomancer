@@ -87,6 +87,7 @@ public:
         SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_LISTBOX));
         Bind(wxEVT_PAINT, &LogCanvasCtrl::OnPaint, this);
         Bind(wxEVT_LEFT_DOWN, &LogCanvasCtrl::OnLeftDown, this);
+        Bind(wxEVT_RIGHT_DOWN, &LogCanvasCtrl::OnRightDown, this);
         Bind(wxEVT_KEY_DOWN, &LogCanvasCtrl::OnKeyDown, this);
         Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
             event.Skip();
@@ -137,6 +138,10 @@ public:
 
     void SetOnSelect(std::function<void(int)> handler) {
         on_select_ = std::move(handler);
+    }
+
+    void SetOnContextMenu(std::function<void(int)> handler) {
+        on_context_menu_ = std::move(handler);
     }
 
     void UpdateVirtualSize() {
@@ -266,6 +271,19 @@ private:
         }
     }
 
+    void OnRightDown(wxMouseEvent& event) {
+        SetFocus();
+        const wxPoint point = CalcUnscrolledPosition(event.GetPosition());
+        const int row = point.y / kRowHeight;
+        if (row < 0 || row >= static_cast<int>(model_->GetCount())) {
+            return;
+        }
+        Select(row); // the menu acts on what the user sees highlighted
+        if (on_context_menu_) {
+            on_context_menu_(row);
+        }
+    }
+
     void OnKeyDown(wxKeyEvent& event) {
         const int count = static_cast<int>(model_->GetCount());
         if (count == 0) {
@@ -305,6 +323,7 @@ private:
     GraphStyle style_ = GraphStyle::Angular;
     int selected_ = -1;
     std::function<void(int)> on_select_;
+    std::function<void(int)> on_context_menu_;
     std::unordered_map<long, wxBitmap> strips_;
     int strip_width_ = -1;
 };
@@ -380,6 +399,10 @@ int LogView::SelectedRow() const { return canvas_->SelectedRow(); }
 
 void LogView::SetOnSelect(std::function<void(int)> handler) {
     canvas_->SetOnSelect(std::move(handler));
+}
+
+void LogView::SetOnContextMenu(std::function<void(int)> handler) {
+    canvas_->SetOnContextMenu(std::move(handler));
 }
 
 wxWindow* LogView::canvas() const { return canvas_; }

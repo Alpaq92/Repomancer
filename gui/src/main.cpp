@@ -33,7 +33,11 @@ public:
             css,
             "scrolledwindow undershoot.top, scrolledwindow undershoot.bottom,"
             "scrolledwindow undershoot.left, scrolledwindow undershoot.right"
-            "{ background-image: none; border: none; }",
+            "{ background-image: none; border: none; }"
+            // Menu-item icons sit a couple of pixels above the label's
+            // optical centre in this theme; nudge the image widget down so
+            // every menu icon lines up with its text.
+            "menu menuitem image { margin-top: 2px; }",
             -1, nullptr);
         gtk_style_context_add_provider_for_screen(
             gdk_screen_get_default(), GTK_STYLE_PROVIDER(css),

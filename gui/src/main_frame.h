@@ -34,6 +34,7 @@ using MainFrameBase = wxFrame;
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -58,13 +59,13 @@ private:
     void OnPreferences(wxCommandEvent& event);
     void RebuildRecentMenu();
     // Fetches and shows the history of the changed file at `index`.
-    void ShowFileHistory(std::size_t index);
-    void ShowFileBlame(std::size_t index);
+    void ShowFileHistory(const std::string& path);
+    void ShowFileBlame(const std::string& path);
     // Opens the working-tree copy of the changed file with the system's
     // default application.
-    void OpenChangedFile(std::size_t index);
+    void OpenChangedFile(const std::string& path);
     // Opens the file's directory in the system file manager.
-    void OpenContainingFolder(std::size_t index);
+    void OpenContainingFolder(const std::string& path);
     void OnFileSelected(wxDataViewEvent& event);
 
     void LoadRepository(const wxString& path);
@@ -80,8 +81,17 @@ private:
     // Serialized on op_worker_ — the join/queue policy lives here alone.
     template <typename Op, typename Done>
     void RunGitOp(wxString failure_prefix, Op op, Done done) {
+        // One op at a time — and never a UI-thread join on a LIVE worker: a
+        // slow fetch would freeze the whole window for its duration. The
+        // flag clears before `done` runs, so completions may chain ops.
+        if (op_running_.load()) {
+            wxBell();
+            SetStatusText(_("Another git operation is still running…"));
+            return;
+        }
+        op_running_.store(true);
         if (op_worker_.joinable()) {
-            op_worker_.join();
+            op_worker_.join(); // the previous thread has already finished
         }
         op_worker_ = std::thread([this, failure_prefix = std::move(failure_prefix),
                                   op = std::move(op), done = std::move(done),
@@ -89,6 +99,7 @@ private:
             auto result = op(repo, config);
             CallAfter([this, failure_prefix = std::move(failure_prefix),
                        result = std::move(result), done = std::move(done)]() mutable {
+                op_running_.store(false);
                 if (!result.ok()) {
                     SetStatusText(failure_prefix +
                                   repomancer::gui::error_text(result.error()));
@@ -99,8 +110,26 @@ private:
         });
     }
 
+    // False (with an actionable status message) when the repository is
+    // open read-only — every GUI mutation entry point checks this BEFORE
+    // collecting input, on top of the driver's own refusal.
+    bool RepoWritable();
+    void ComputeReadOnlyOverrides(const std::filesystem::path& repo);
+
     void ShowWorktree();
-    void StageWorktreeFile(std::size_t index, bool stage);
+    // Menu actions are keyed by PATH, not row index: popup menus and modal
+    // dialogs run nested event loops in which a pending refresh can rebuild
+    // the lists, so an index captured at menu-build time may name a
+    // different file by action time.
+    void FetchRemotes();
+    void PullCurrentBranch();
+    void PushCurrentBranch();
+    void StashChanges();
+    void PopStash();
+    void OnLogMenu(int row);
+    void OnHunkMenu(const repomancer::vcs::FileDiff& file, std::size_t hunk);
+    void DiscardFile(const std::string& path);
+    void StageWorktreeFile(const std::string& path, bool stage);
     void CommitStaged();
     void OnBranchMenu(const wxString& branch);
     void SwitchBranch(const std::string& branch);
@@ -134,6 +163,7 @@ private:
     std::unique_ptr<CommitLogModel> model_;
     // Owned menus when there is no wxMenuBar (integrated title bar mode).
     std::unique_ptr<wxMenu> file_menu_owned_;
+    std::unique_ptr<wxMenu> repo_menu_owned_;
     std::unique_ptr<wxMenu> view_menu_owned_;
     std::unique_ptr<wxMenu> help_menu_owned_;
     wxMenu* recent_menu_ = nullptr; // owned by the File menu
@@ -145,6 +175,11 @@ private:
     std::vector<repomancer::vcs::ChangedFile> changed_files_;
     // The files pane shows the working tree instead of a commit's files.
     bool worktree_mode_ = false;
+    bool diff_is_staged_ = false; // the diff pane shows HEAD-vs-index
+    bool repo_read_only_ = false; // §13.1: the open repo is untrusted
+    // Repos the user chose "Open Read-Only" for THIS session: the gate
+    // auto-answers instead of re-prompting on every reload.
+    std::set<std::string> session_read_only_;
     std::vector<repomancer::vcs::StatusEntry> worktree_entries_;
     std::string current_branch_;
     std::thread worker_;
@@ -154,6 +189,7 @@ private:
     std::thread files_worker_;
     std::thread diff_worker_;
     std::thread op_worker_;
+    std::atomic<bool> op_running_{false};
     std::atomic<unsigned> files_generation_{0};
     std::atomic<unsigned> diff_generation_{0};
 };

@@ -11,6 +11,7 @@ add_executable(repomancer-tests
   test_graph_branch_layout.cpp
   test_diff.cpp
   test_blame.cpp
+  test_patch.cpp
   test_refs.cpp
   test_stats.cpp
   test_process_runner.cpp

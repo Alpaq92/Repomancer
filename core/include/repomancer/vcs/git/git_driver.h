@@ -20,11 +20,23 @@
 
 namespace repomancer::vcs::git {
 
+// §13.1 repo trust gate. A repository the user has not vouched for runs
+// READ-ONLY: every mutating driver method refuses up front, and the
+// invocations neutralize exec-capable config (hooks, ssh command,
+// credential helpers) as defense in depth.
+enum class RepoTrust { Trusted, ReadOnly };
+
 struct GitConfig {
     // Resolved from Preferences → VCS Providers; "git" means PATH lookup.
     std::filesystem::path binary = "git";
     std::chrono::milliseconds timeout{std::chrono::milliseconds(60'000)};
     ParseLimits limits{};
+    RepoTrust trust = RepoTrust::Trusted;
+    // §13.1: extra "-c key=" argument pairs appended when trust==ReadOnly,
+    // computed once per repo from its OWN config — the content/diff filter
+    // drivers it declares, whose names are arbitrary and so cannot be a
+    // fixed list. Populated via read_only_overrides() before loading.
+    std::vector<std::string> extra_neutralize;
 };
 
 struct GitVersion {
@@ -43,9 +55,25 @@ public:
 
     [[nodiscard]] VcsResult<GitVersion> version() const;
 
-    // The working tree's combined (staged + unstaged) patch against HEAD,
-    // optionally scoped to one path. Untracked files produce no output.
+    // §13.1: the "-c filter.<d>.clean=" (and .smudge/.process) plus
+    // "-c diff.<d>.command=/.textconv=" overrides that neutralize the
+    // program-naming drivers declared in this repository's OWN (--local)
+    // config. Reading config executes nothing; the user's global drivers
+    // (e.g. git-lfs) are untouched. Store the result in
+    // GitConfig::extra_neutralize before opening an untrusted repo.
+    [[nodiscard]] VcsResult<std::vector<std::string>>
+    read_only_overrides(const std::filesystem::path& repo) const;
+
+    // The unstaged patch (index vs worktree), optionally scoped to one
+    // path. Untracked files produce no output. This is the base hunk
+    // staging/discard operate on — see apply_patch.
     [[nodiscard]] VcsResult<std::vector<FileDiff>> worktree_diff(
+        const std::filesystem::path& repo, const std::string& path = {},
+        int context_lines = 3) const;
+
+    // The staged patch (HEAD vs index), optionally scoped to one path.
+    // Hunk UN-staging operates on this base.
+    [[nodiscard]] VcsResult<std::vector<FileDiff>> staged_diff(
         const std::filesystem::path& repo, const std::string& path = {},
         int context_lines = 3) const;
 
@@ -73,6 +101,41 @@ public:
     [[nodiscard]] VcsResult<std::string> create_branch(const std::filesystem::path& repo,
                                                        const std::string& branch,
                                                        bool checkout) const;
+
+    // Remote synchronization. All three run prompt-free
+    // (GIT_TERMINAL_PROMPT=0): missing credentials fail fast with git's own
+    // message rather than hanging on a hidden prompt. `pull` is --ff-only —
+    // a divergent branch is surfaced, never silently merged.
+    [[nodiscard]] VcsResult<std::string> fetch(const std::filesystem::path& repo) const;
+    [[nodiscard]] VcsResult<std::string> pull(const std::filesystem::path& repo) const;
+    [[nodiscard]] VcsResult<std::string> push(const std::filesystem::path& repo) const;
+
+    // Stashes the tracked changes (stash push). The message is argv-safe:
+    // it rides as -m's own argument, which git consumes whole.
+    [[nodiscard]] VcsResult<std::string> stash_save(const std::filesystem::path& repo,
+                                                    const std::string& message = {}) const;
+
+    // Re-applies and drops the newest stash (stash pop).
+    [[nodiscard]] VcsResult<std::string> stash_pop(const std::filesystem::path& repo) const;
+
+    // Creates a lightweight tag at `rev` (HEAD when empty). The name goes
+    // behind --end-of-options; the rev is program-controlled.
+    [[nodiscard]] VcsResult<std::string> create_tag(const std::filesystem::path& repo,
+                                                    const std::string& name,
+                                                    const std::string& rev = {}) const;
+
+    // Applies a patch (as produced by single_hunk_patch) to the index
+    // (`cached` — staging) or the working tree; `reverse` un-applies it
+    // (hunk discard). The patch travels on stdin, never argv.
+    [[nodiscard]] VcsResult<std::string> apply_patch(const std::filesystem::path& repo,
+                                                     const std::string& patch,
+                                                     bool cached, bool reverse) const;
+
+    // Restores one tracked path to HEAD in both the index and the working
+    // tree — the whole-file discard. Untracked files are the caller's to
+    // delete; restore has no source for them.
+    [[nodiscard]] VcsResult<std::string> discard_file(const std::filesystem::path& repo,
+                                                      const std::string& path) const;
 
     // Line attribution of `path` at `rev` (blame --line-porcelain).
     [[nodiscard]] VcsResult<std::vector<BlameLine>> blame(

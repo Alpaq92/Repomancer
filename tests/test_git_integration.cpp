@@ -5,9 +5,13 @@
 
 #include <repomancer/vcs/git/git_driver.h>
 
+#include <repomancer/process/process_runner.h>
+#include <repomancer/vcs/patch.h>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <fstream>
 
 using namespace repomancer::vcs;
 using repomancer::test::FixtureRepo;
@@ -19,6 +23,18 @@ const StatusEntry* find_entry(const StatusSnapshot& snapshot, const std::string&
     const auto it = std::find_if(snapshot.entries.begin(), snapshot.entries.end(),
                                  [&](const StatusEntry& e) { return e.path == path; });
     return it == snapshot.entries.end() ? nullptr : &*it;
+}
+
+// Raw git for the remote plumbing the driver has no business exposing
+// (init --bare, remote add). Fails the test on error.
+void raw_git(const std::filesystem::path& cwd, std::vector<std::string> args) {
+    repomancer::proc::RunSpec spec;
+    spec.exe = "git";
+    spec.cwd = cwd;
+    spec.args = std::move(args);
+    const auto run = repomancer::proc::ProcessRunner::run(spec);
+    INFO("git stderr: " << run.err);
+    REQUIRE(run.ok());
 }
 
 } // namespace
@@ -243,19 +259,25 @@ TEST_CASE("git integration: blame attributes every line to a known commit",
     }
 }
 
-TEST_CASE("git integration: the worktree diff sees uncommitted changes",
+TEST_CASE("git integration: worktree and staged diffs split by index side",
           "[integration]") {
     repomancer::test::FixtureRepo repo;
     repomancer::vcs::git::GitDriver driver;
 
-    const auto diff = driver.worktree_diff(repo.path());
-    REQUIRE(diff.ok());
-    // The fixture leaves a.txt modified unstaged and staged.txt staged.
-    const bool has_a =
-        std::any_of(diff.value().begin(), diff.value().end(),
-                    [](const auto& f) { return f.new_path == "a.txt"; });
-    CHECK(has_a);
-    CHECK(!diff.value().empty());
+    // The fixture leaves a.txt modified UNSTAGED and staged.txt added STAGED.
+    const auto unstaged = driver.worktree_diff(repo.path());
+    REQUIRE(unstaged.ok());
+    const auto in = [](const auto& files, const char* path) {
+        return std::any_of(files.begin(), files.end(),
+                           [&](const auto& f) { return f.new_path == path; });
+    };
+    CHECK(in(unstaged.value(), "a.txt"));
+    CHECK(!in(unstaged.value(), "staged.txt")); // index side only
+
+    const auto staged = driver.staged_diff(repo.path());
+    REQUIRE(staged.ok());
+    CHECK(in(staged.value(), "staged.txt"));
+    CHECK(!in(staged.value(), "a.txt"));
 }
 
 TEST_CASE("git integration: stage, unstage and commit round-trip",
@@ -327,4 +349,523 @@ TEST_CASE("git integration: branch switch and create", "[integration]") {
     CHECK(created);
 
     CHECK(!driver.switch_branch(repo.path(), "no-such-branch").ok());
+}
+
+TEST_CASE("git integration: stash save and pop round-trip", "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+
+    // The fixture's tree is dirty (a.txt modified, staged.txt staged);
+    // stashing sets the tracked changes aside…
+    const auto saved = driver.stash_save(repo.path(), "wip: fixture state");
+    if (!saved.ok()) {
+        UNSCOPED_INFO("stash error: " << saved.error().stderr_excerpt);
+    }
+    REQUIRE(saved.ok());
+    auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(find_entry(status.value(), "a.txt") == nullptr);
+
+    const auto refs = driver.refs(repo.path());
+    REQUIRE(refs.ok());
+    const bool stash_listed =
+        std::any_of(refs.value().begin(), refs.value().end(),
+                    [](const auto& r) { return r.kind == RefKind::Stash; });
+    CHECK(stash_listed);
+
+    // …and popping brings them back.
+    REQUIRE(driver.stash_pop(repo.path()).ok());
+    status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(find_entry(status.value(), "a.txt") != nullptr);
+
+    // No stash left: pop again fails with git's own words, not a crash.
+    const auto empty_pop = driver.stash_pop(repo.path());
+    REQUIRE(!empty_pop.ok());
+    CHECK(!empty_pop.error().stderr_excerpt.empty());
+}
+
+TEST_CASE("git integration: tag creation lands on the requested commit",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+
+    const auto log = driver.log(repo.path(), {});
+    REQUIRE(log.ok());
+    REQUIRE(log.value().size() >= 2);
+    const std::string target = log.value()[1].hash; // not the tip
+
+    REQUIRE(driver.create_tag(repo.path(), "v-test", target).ok());
+    const auto refs = driver.refs(repo.path());
+    REQUIRE(refs.ok());
+    const auto tag = std::find_if(refs.value().begin(), refs.value().end(),
+                                  [](const auto& r) { return r.short_name == "v-test"; });
+    REQUIRE(tag != refs.value().end());
+    CHECK(tag->target == target);
+
+    // A duplicate name is git's error to report, cleanly.
+    CHECK(!driver.create_tag(repo.path(), "v-test", target).ok());
+}
+
+TEST_CASE("git integration: push, fetch and pull against a local bare remote",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+
+    // A bare sibling becomes origin; main gets an upstream there.
+    const auto bare = repo.path().parent_path() /
+                      (repo.path().filename().string() + "-remote.git");
+    raw_git(repo.path().parent_path(), {"init", "--bare", "--quiet",
+                                        bare.filename().string()});
+    raw_git(repo.path(), {"remote", "add", "origin", bare.string()});
+
+    const auto pushed = driver.push(repo.path());
+    // A fresh clone has no upstream; the driver must surface git's advice…
+    REQUIRE(!pushed.ok());
+    CHECK(!pushed.error().stderr_excerpt.empty());
+
+    // …and once the upstream exists, the three ops run clean.
+    raw_git(repo.path(), {"push", "--quiet", "--set-upstream", "origin", "main"});
+    REQUIRE(driver.push(repo.path()).ok());
+    REQUIRE(driver.fetch(repo.path()).ok());
+    const auto pulled = driver.pull(repo.path());
+    if (!pulled.ok()) {
+        UNSCOPED_INFO("pull error: " << pulled.error().stderr_excerpt);
+    }
+    REQUIRE(pulled.ok());
+
+    std::filesystem::remove_all(bare);
+}
+
+TEST_CASE("git integration: staging one hunk of two leaves the file partially staged",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+
+    // A fresh many-line file, committed, then edited at both ends so the
+    // combined diff has two well-separated hunks.
+    {
+        std::string body;
+        for (int i = 1; i <= 30; ++i) {
+            body += "line " + std::to_string(i) + "\n";
+        }
+        raw_git(repo.path(), {"stash", "push", "--include-untracked", "-m", "park"});
+        std::ofstream(repo.path() / "wide.txt") << body;
+        raw_git(repo.path(), {"add", "wide.txt"});
+        raw_git(repo.path(), {"commit", "--quiet", "-m", "wide baseline"});
+        body.replace(body.find("line 2\n"), 7, "LINE 2\n");
+        body.replace(body.find("line 29\n"), 8, "LINE 29\n");
+        std::ofstream(repo.path() / "wide.txt") << body;
+    }
+
+    const auto diff = driver.worktree_diff(repo.path(), "wide.txt");
+    REQUIRE(diff.ok());
+    REQUIRE(diff.value().size() == 1);
+    const auto& file = diff.value()[0];
+    REQUIRE(file.hunks.size() == 2);
+    REQUIRE(supports_hunk_ops(file));
+
+    // Stage only the first hunk…
+    const std::string patch = single_hunk_patch(file, 0);
+    REQUIRE(!patch.empty());
+    const auto applied = driver.apply_patch(repo.path(), patch, /*cached=*/true,
+                                            /*reverse=*/false);
+    if (!applied.ok()) {
+        UNSCOPED_INFO("apply error: " << applied.error().stderr_excerpt);
+    }
+    REQUIRE(applied.ok());
+
+    // …and the file is now both staged and modified (partial staging).
+    auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    const auto* entry = find_entry(status.value(), "wide.txt");
+    REQUIRE(entry != nullptr);
+    CHECK(entry->x == 'M');
+    CHECK(entry->y == 'M');
+
+    // The unstaged diff re-derives against the NEW index — that is the
+    // property the GUI relies on: after each stage the remaining hunks stay
+    // stageable. Stage the survivor too.
+    const auto rediff = driver.worktree_diff(repo.path(), "wide.txt");
+    REQUIRE(rediff.ok());
+    REQUIRE(rediff.value().size() == 1);
+    REQUIRE(rediff.value()[0].hunks.size() == 1);
+    REQUIRE(driver
+                .apply_patch(repo.path(), single_hunk_patch(rediff.value()[0], 0),
+                             /*cached=*/true, /*reverse=*/false)
+                .ok());
+    status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    entry = find_entry(status.value(), "wide.txt");
+    REQUIRE(entry != nullptr);
+    CHECK(entry->x == 'M');
+    CHECK(entry->y == '.');
+
+    // Unstage one hunk from the staged side (HEAD-vs-index base).
+    const auto staged = driver.staged_diff(repo.path(), "wide.txt");
+    REQUIRE(staged.ok());
+    REQUIRE(staged.value().size() == 1);
+    REQUIRE(staged.value()[0].hunks.size() == 2);
+    REQUIRE(driver
+                .apply_patch(repo.path(), single_hunk_patch(staged.value()[0], 0),
+                             /*cached=*/true, /*reverse=*/true)
+                .ok());
+    status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    entry = find_entry(status.value(), "wide.txt");
+    REQUIRE(entry != nullptr);
+    CHECK(entry->x == 'M');
+    CHECK(entry->y == 'M');
+
+    // Discard the now-unstaged hunk from the working tree.
+    const auto unstaged = driver.worktree_diff(repo.path(), "wide.txt");
+    REQUIRE(unstaged.ok());
+    REQUIRE(unstaged.value().size() == 1);
+    REQUIRE(unstaged.value()[0].hunks.size() == 1);
+    REQUIRE(driver
+                .apply_patch(repo.path(), single_hunk_patch(unstaged.value()[0], 0),
+                             /*cached=*/false, /*reverse=*/true)
+                .ok());
+    status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    entry = find_entry(status.value(), "wide.txt");
+    REQUIRE(entry != nullptr);
+    CHECK(entry->y == '.');
+}
+
+TEST_CASE("git integration: whole-file discard restores HEAD in index and worktree",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+
+    // a.txt arrives modified from the fixture; stage part of that state so
+    // both sides are dirty, then discard the lot.
+    REQUIRE(driver.stage(repo.path(), "a.txt").ok());
+    auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    REQUIRE(find_entry(status.value(), "a.txt") != nullptr);
+
+    REQUIRE(driver.discard_file(repo.path(), "a.txt").ok());
+    status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(find_entry(status.value(), "a.txt") == nullptr);
+
+    // Untracked files are outside restore's reach — git's error, not a hang.
+    CHECK(!driver.discard_file(repo.path(), "untracked.txt").ok());
+}
+
+TEST_CASE("git integration: hunk ops round-trip CRLF and no-newline files",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    raw_git(repo.path(), {"stash", "push", "--include-untracked", "-m", "park"});
+
+    SECTION("CRLF line endings survive the parse/serialize round-trip") {
+        std::ofstream(repo.path() / "dos.txt", std::ios::binary)
+            << "one\r\ntwo\r\nthree\r\n";
+        raw_git(repo.path(), {"add", "dos.txt"});
+        raw_git(repo.path(), {"commit", "--quiet", "-m", "dos baseline"});
+        std::ofstream(repo.path() / "dos.txt", std::ios::binary)
+            << "one\r\nTWO\r\nthree\r\n";
+
+        const auto diff = driver.worktree_diff(repo.path(), "dos.txt");
+        REQUIRE(diff.ok());
+        REQUIRE(diff.value().size() == 1);
+        REQUIRE(supports_hunk_ops(diff.value()[0]));
+        const std::string patch = single_hunk_patch(diff.value()[0], 0);
+        const auto applied = driver.apply_patch(repo.path(), patch,
+                                                /*cached=*/true, /*reverse=*/false);
+        if (!applied.ok()) {
+            UNSCOPED_INFO("apply error: " << applied.error().stderr_excerpt);
+        }
+        REQUIRE(applied.ok());
+        const auto status = driver.status(repo.path());
+        REQUIRE(status.ok());
+        const auto* entry = find_entry(status.value(), "dos.txt");
+        REQUIRE(entry != nullptr);
+        CHECK(entry->x == 'M');
+        CHECK(entry->y == '.');
+    }
+
+    SECTION("a file without trailing newline stages and discards cleanly") {
+        std::ofstream(repo.path() / "noeol.txt", std::ios::binary) << "alpha\nomega";
+        raw_git(repo.path(), {"add", "noeol.txt"});
+        raw_git(repo.path(), {"commit", "--quiet", "-m", "noeol baseline"});
+        std::ofstream(repo.path() / "noeol.txt", std::ios::binary) << "alpha\nOMEGA";
+
+        // The diff carries TWO backslash markers (one per side).
+        const auto diff = driver.worktree_diff(repo.path(), "noeol.txt");
+        REQUIRE(diff.ok());
+        REQUIRE(diff.value().size() == 1);
+        const std::string patch = single_hunk_patch(diff.value()[0], 0);
+        REQUIRE(driver
+                    .apply_patch(repo.path(), patch, /*cached=*/true, /*reverse=*/false)
+                    .ok());
+        auto status = driver.status(repo.path());
+        REQUIRE(status.ok());
+        const auto* entry = find_entry(status.value(), "noeol.txt");
+        REQUIRE(entry != nullptr);
+        CHECK(entry->x == 'M');
+        CHECK(entry->y == '.');
+
+        // And back out of the index, then out of the worktree: pristine.
+        REQUIRE(driver
+                    .apply_patch(repo.path(), patch, /*cached=*/true, /*reverse=*/true)
+                    .ok());
+        REQUIRE(driver
+                    .apply_patch(repo.path(), patch, /*cached=*/false, /*reverse=*/true)
+                    .ok());
+        status = driver.status(repo.path());
+        REQUIRE(status.ok());
+        CHECK(find_entry(status.value(), "noeol.txt") == nullptr);
+    }
+
+    SECTION("non-ASCII paths round-trip (quotepath off)") {
+        std::ofstream(repo.path() / "na\u00efve.txt") << "x\ny\n";
+        raw_git(repo.path(), {"add", "na\u00efve.txt"});
+        raw_git(repo.path(), {"commit", "--quiet", "-m", "utf8 baseline"});
+        std::ofstream(repo.path() / "na\u00efve.txt") << "x\nY\n";
+
+        const auto diff = driver.worktree_diff(repo.path());
+        REQUIRE(diff.ok());
+        REQUIRE(diff.value().size() == 1);
+        CHECK(diff.value()[0].new_path == "na\u00efve.txt");
+        REQUIRE(supports_hunk_ops(diff.value()[0]));
+        REQUIRE(driver
+                    .apply_patch(repo.path(), single_hunk_patch(diff.value()[0], 0),
+                                 /*cached=*/true, /*reverse=*/false)
+                    .ok());
+    }
+}
+
+TEST_CASE("git integration: literal pathspecs defuse magic-named files",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    raw_git(repo.path(), {"stash", "push", "--include-untracked", "-m", "park"});
+
+    // A tracked file literally named ":(glob)*" — legal bytes on Linux. As a
+    // pathspec that string matches EVERYTHING unless magic is off; a discard
+    // on it must not touch other files.
+    std::ofstream(repo.path() / ":(glob)*") << "trap\n";
+    raw_git(repo.path(), {"add", "--", ":(glob)*"});
+    raw_git(repo.path(), {"commit", "--quiet", "-m", "trap file"});
+    std::ofstream(repo.path() / "victim.txt") << "precious\n";
+    raw_git(repo.path(), {"add", "victim.txt"});
+    raw_git(repo.path(), {"commit", "--quiet", "-m", "victim"});
+    std::ofstream(repo.path() / ":(glob)*") << "trap edited\n";
+    std::ofstream(repo.path() / "victim.txt") << "precious edited\n";
+
+    REQUIRE(driver.discard_file(repo.path(), ":(glob)*").ok());
+    const auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(find_entry(status.value(), ":(glob)*") == nullptr); // discarded
+    const auto* victim = find_entry(status.value(), "victim.txt");
+    REQUIRE(victim != nullptr); // the other edit SURVIVED
+    CHECK(victim->y == 'M');
+}
+
+TEST_CASE("git integration: option-looking user strings stay data",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+
+    SECTION("stash message") {
+        // Must stash the tracked change, leave untracked.txt on disk, and
+        // record the message verbatim — not act as --include-untracked.
+        REQUIRE(driver.stash_save(repo.path(), "--include-untracked").ok());
+        const auto status = driver.status(repo.path());
+        REQUIRE(status.ok());
+        const auto* untracked = find_entry(status.value(), "untracked.txt");
+        REQUIRE(untracked != nullptr);
+        CHECK(untracked->kind == EntryKind::Untracked);
+        REQUIRE(driver.stash_pop(repo.path()).ok());
+    }
+
+    SECTION("tag name") {
+        const auto log = driver.log(repo.path(), {});
+        REQUIRE(log.ok());
+        const std::string target = log.value().front().hash;
+        // Without --end-of-options this would SUCCEED as `git tag -f <hash>`.
+        CHECK(!driver.create_tag(repo.path(), "-f", target).ok());
+        CHECK(!driver.create_tag(repo.path(), "-d", target).ok());
+        const auto refs = driver.refs(repo.path());
+        REQUIRE(refs.ok());
+        CHECK(std::none_of(refs.value().begin(), refs.value().end(),
+                           [](const auto& r) { return r.kind == RefKind::Tag; }));
+    }
+}
+
+TEST_CASE("git integration: read-only trust refuses every mutation up front",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    repomancer::vcs::git::GitConfig config;
+    config.trust = repomancer::vcs::git::RepoTrust::ReadOnly;
+    GitDriver driver(config);
+
+    // Reads still work…
+    REQUIRE(driver.status(repo.path()).ok());
+    REQUIRE(driver.log(repo.path(), {}).ok());
+    REQUIRE(driver.worktree_diff(repo.path()).ok());
+
+    // …every mutation refuses with the trust error, and no state changes.
+    const auto before = driver.status(repo.path());
+    REQUIRE(before.ok());
+    const auto refused = [](const auto& result) {
+        return !result.ok() &&
+               result.error().kind == VcsError::Kind::UntrustedRepo;
+    };
+    CHECK(refused(driver.stage(repo.path(), "a.txt")));
+    CHECK(refused(driver.unstage(repo.path(), "a.txt")));
+    CHECK(refused(driver.commit(repo.path(), "nope")));
+    CHECK(refused(driver.switch_branch(repo.path(), "feature")));
+    CHECK(refused(driver.create_branch(repo.path(), "evil", false)));
+    CHECK(refused(driver.stash_save(repo.path(), "")));
+    CHECK(refused(driver.stash_pop(repo.path())));
+    CHECK(refused(driver.create_tag(repo.path(), "t", "")));
+    CHECK(refused(driver.discard_file(repo.path(), "a.txt")));
+    CHECK(refused(driver.apply_patch(repo.path(), "--- a/x\n", true, false)));
+    CHECK(refused(driver.fetch(repo.path())));
+    CHECK(refused(driver.pull(repo.path())));
+    CHECK(refused(driver.push(repo.path())));
+    const auto after = driver.status(repo.path());
+    REQUIRE(after.ok());
+    CHECK(after.value().entries.size() == before.value().entries.size());
+}
+
+TEST_CASE("git integration: hostile fsmonitor config never executes",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+
+    // A hostile repo sets core.fsmonitor to a command; plain `git status`
+    // would execute it. The driver must not, trusted or not (§13.1 — the
+    // fsmonitor neutralization is unconditional).
+    const auto marker = repo.path() / "PWNED";
+    raw_git(repo.path(),
+            {"config", "core.fsmonitor", "touch " + marker.string()});
+
+    for (const auto trust : {repomancer::vcs::git::RepoTrust::Trusted,
+                             repomancer::vcs::git::RepoTrust::ReadOnly}) {
+        repomancer::vcs::git::GitConfig config;
+        config.trust = trust;
+        GitDriver driver(config);
+        REQUIRE(driver.status(repo.path()).ok());
+        REQUIRE(driver.log(repo.path(), {}).ok());
+        std::error_code ec;
+        CHECK(!std::filesystem::exists(marker, ec));
+    }
+}
+
+TEST_CASE("git integration: untrusted read paths never execute textconv or hooks",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    const auto tc = repo.path() / "PWNED_TEXTCONV";
+    const auto hook = repo.path() / "PWNED_HOOK";
+    // a.txt already arrives modified from the fixture, so a clean filter
+    // would fire on the worktree diff.
+
+    // A hostile repo wires a textconv diff driver and a post-index-change
+    // hook, both to touch a marker.
+    raw_git(repo.path(),
+            {"config", "diff.evil.textconv", "touch " + tc.string() + "; cat"});
+    const auto flt = repo.path() / "PWNED_FILTER";
+    raw_git(repo.path(),
+            {"config", "filter.evil.clean", "touch " + flt.string() + "; cat"});
+    raw_git(repo.path(),
+            {"config", "filter.evil.smudge", "touch " + flt.string() + "; cat"});
+    std::ofstream(repo.path() / ".gitattributes")
+        << "a.txt diff=evil\na.txt filter=evil\n";
+    const auto hooksdir = repo.path() / "eviltrap";
+    std::filesystem::create_directories(hooksdir);
+    {
+        std::ofstream h(hooksdir / "post-index-change");
+        h << "#!/bin/sh\ntouch " << hook.string() << "\n";
+    }
+    std::filesystem::permissions(hooksdir / "post-index-change",
+                                 std::filesystem::perms::owner_all);
+    raw_git(repo.path(), {"config", "core.hooksPath", hooksdir.string()});
+
+    repomancer::vcs::git::GitConfig config;
+    config.trust = repomancer::vcs::git::RepoTrust::ReadOnly;
+    // Filter driver names are arbitrary; the read_only_overrides step reads
+    // the repo's own config and produces the "-c filter.evil.clean=" pairs
+    // (exactly what the GUI does at the trust gate).
+    {
+        GitDriver probe(config);
+        auto ov = probe.read_only_overrides(repo.path());
+        REQUIRE(ov.ok());
+        config.extra_neutralize = std::move(ov).value();
+        CHECK(!config.extra_neutralize.empty());
+    }
+    GitDriver driver(config);
+
+    // Every read path an untrusted repo exposes.
+    REQUIRE(driver.status(repo.path()).ok());
+    REQUIRE(driver.log(repo.path(), {}).ok());
+    REQUIRE(driver.refs(repo.path()).ok());
+    REQUIRE(driver.worktree_diff(repo.path()).ok());
+    REQUIRE(driver.blame(repo.path(), "a.txt").ok());
+    const auto commits = driver.log(repo.path(), {});
+    REQUIRE(commits.ok());
+    if (!commits.value().empty()) {
+        (void)driver.changed_files(repo.path(), commits.value().front().hash);
+        (void)driver.file_diff(repo.path(), commits.value().front().hash, "a.txt");
+    }
+
+    std::error_code ec;
+    CHECK(!std::filesystem::exists(tc, ec));
+    CHECK(!std::filesystem::exists(hook, ec));
+    CHECK(!std::filesystem::exists(flt, ec));
+}
+
+TEST_CASE("git integration: without overrides a filter WOULD run (guard is real)",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    const auto flt = repo.path() / "PWNED_FILTER";
+    raw_git(repo.path(),
+            {"config", "filter.evil.clean", "touch " + flt.string() + "; cat"});
+    std::ofstream(repo.path() / ".gitattributes") << "a.txt filter=evil\n";
+
+    // Trusted config (no extra_neutralize): the clean filter fires on diff —
+    // proving the neutralization above is load-bearing, not a no-op.
+    repomancer::vcs::git::GitConfig trusted;
+    GitDriver(trusted).worktree_diff(repo.path(), "a.txt");
+    std::error_code ec;
+    CHECK(std::filesystem::exists(flt, ec));
 }

@@ -16,9 +16,11 @@
 
 #include <repomancer/settings.h>
 #include <repomancer/vcs/git/git_driver.h>
+#include <repomancer/vcs/patch.h>
 
 #include <wx/aboutdlg.h>
 #include <wx/aui/dockart.h>
+#include <wx/clipbrd.h>
 #include <wx/dcclient.h>
 #include <wx/dirdlg.h>
 #include <wx/menu.h>
@@ -51,6 +53,12 @@ enum {
     // frame-level ids continue clear of that range.
     ID_Refresh = wxID_HIGHEST + 20,
     ID_Recent1, // … ID_Recent1 + kMaxRecentRepos - 1
+    ID_Fetch = wxID_HIGHEST + 40,
+    ID_Pull,
+    ID_Push,
+    ID_Stash,
+    ID_StashPop,
+    ID_TrustRepo,
 };
 } // namespace
 
@@ -109,6 +117,35 @@ MainFrame::MainFrame() {
     quit_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kExit));
     file_menu->Append(quit_item);
 
+    auto* repo_menu = new wxMenu;
+    const auto repo_item = [repo_menu](int id, const wxString& label,
+                                       const wxString& help, const char* icon) {
+        auto* item = new wxMenuItem(repo_menu, id, label, help);
+        item->SetBitmap(repomancer::gui::icons::menu_icon(icon));
+        repo_menu->Append(item);
+    };
+    repo_item(ID_Fetch, _("&Fetch\tCtrl-Shift-F"),
+              _("Download new commits from every remote"),
+              repomancer::gui::icons::kArrowDownToLine);
+    repo_item(ID_Pull, _("&Pull\tCtrl-Shift-P"),
+              _("Fast-forward the current branch from its upstream"),
+              repomancer::gui::icons::kArrowDown);
+    repo_item(ID_Push, _("Pus&h\tCtrl-P"),
+              _("Publish the current branch to its upstream"),
+              repomancer::gui::icons::kArrowUp);
+    repo_menu->AppendSeparator();
+    repo_item(ID_Stash, _("&Stash Changes…"), _("Set the tracked changes aside"),
+              repomancer::gui::icons::kLayers2);
+    repo_item(ID_StashPop, _("Pop S&tash"), _("Re-apply and drop the newest stash"),
+              repomancer::gui::icons::kUndo2);
+    repo_menu->AppendSeparator();
+    auto* trust_item = new wxMenuItem(
+        repo_menu, ID_TrustRepo, _("Trust This Repositor&y"),
+        _("Allow this repository's configuration and enable changes"));
+    trust_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kShieldCheck));
+    repo_menu->Append(trust_item);
+
     auto* theme_menu = new wxMenu;
     theme_menu->AppendRadioItem(ID_ThemeSystem, _("&System"));
     theme_menu->AppendRadioItem(ID_ThemeLight, _("&Light"));
@@ -139,6 +176,7 @@ MainFrame::MainFrame() {
         // the same handlers. The accelerators the menu bar would have
         // installed are registered explicitly.
         file_menu_owned_.reset(file_menu);
+        repo_menu_owned_.reset(repo_menu);
         view_menu_owned_.reset(view_menu);
         help_menu_owned_.reset(help_menu);
         using Buttons = repomancer::gui::TitleBar::Buttons;
@@ -147,20 +185,28 @@ MainFrame::MainFrame() {
         topbar_native = buttons == Buttons::Native;
         title_bar = new repomancer::gui::TitleBar(
             this,
-            {{_("File"), file_menu}, {_("View"), view_menu}, {_("Help"), help_menu}},
+            {{_("File"), file_menu},
+             {_("Repository"), repo_menu},
+             {_("View"), view_menu},
+             {_("Help"), help_menu}},
             buttons);
         SetBorderColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
         const wxAcceleratorEntry accelerators[] = {
             {wxACCEL_CTRL, 'O', wxID_OPEN},
             {wxACCEL_CTRL, ',', wxID_PREFERENCES},
             {wxACCEL_NORMAL, WXK_F5, ID_Refresh},
+            {wxACCEL_CTRL | wxACCEL_SHIFT, 'F', ID_Fetch},
+            {wxACCEL_CTRL | wxACCEL_SHIFT, 'P', ID_Pull},
+            {wxACCEL_CTRL, 'P', ID_Push},
         };
-        SetAcceleratorTable(wxAcceleratorTable(3, accelerators));
+        SetAcceleratorTable(
+            wxAcceleratorTable(WXSIZEOF(accelerators), accelerators));
     }
 #endif
     if (!integrated_titlebar) {
         auto* menu_bar = new wxMenuBar;
         menu_bar->Append(file_menu, _("&File"));
+        menu_bar->Append(repo_menu, _("&Repository"));
         menu_bar->Append(view_menu, _("&View"));
         menu_bar->Append(help_menu, _("&Help"));
         SetMenuBar(menu_bar);
@@ -205,6 +251,7 @@ MainFrame::MainFrame() {
     }
     log_->SetStyle(startup_style);
     log_->SetOnSelect([this](int row) { ShowCommit(row); });
+    log_->SetOnContextMenu([this](int row) { OnLogMenu(row); });
 
     // Wrapped, not clipped: a long subject or a wide body should reflow
     // rather than force horizontal scrolling, and the text needs room to
@@ -322,6 +369,10 @@ MainFrame::MainFrame() {
     auto* diff_table = new wxPanel(diff_panel_, wxID_ANY, wxDefaultPosition,
                                    wxDefaultSize, wxBORDER_NONE);
     diff_ = new repomancer::gui::DiffView(diff_table);
+    diff_->SetOnHunkMenu(
+        [this](const repomancer::vcs::FileDiff& file, std::size_t hunk) {
+            OnHunkMenu(file, hunk);
+        });
     titled(diff_table, _("Diff"), diff_);
     {
         auto* outer = new wxBoxSizer(wxHORIZONTAL);
@@ -488,6 +539,53 @@ MainFrame::MainFrame() {
             }
         },
         ID_Refresh);
+    // The remote/stash operations all need a repository first; one guard
+    // routes each to its worker.
+    const auto repo_op = [this](void (MainFrame::*op)()) {
+        return [this, op](wxCommandEvent&) {
+            if (repo_path_.empty() || busy_.load()) {
+                wxBell();
+                return;
+            }
+            (this->*op)();
+        };
+    };
+    Bind(wxEVT_MENU, repo_op(&MainFrame::FetchRemotes), ID_Fetch);
+    Bind(wxEVT_MENU, repo_op(&MainFrame::PullCurrentBranch), ID_Pull);
+    Bind(wxEVT_MENU, repo_op(&MainFrame::PushCurrentBranch), ID_Push);
+    Bind(wxEVT_MENU, repo_op(&MainFrame::StashChanges), ID_Stash);
+    Bind(wxEVT_MENU, repo_op(&MainFrame::PopStash), ID_StashPop);
+    Bind(
+        wxEVT_MENU,
+        [this](wxCommandEvent&) {
+            if (repo_path_.empty() ||
+                git_config_.trust != repomancer::vcs::git::RepoTrust::ReadOnly) {
+                wxBell();
+                return;
+            }
+            std::error_code ec;
+            const auto canonical =
+                std::filesystem::weakly_canonical(repo_path_, ec);
+            const std::string key = ec ? repo_path_.string() : canonical.string();
+            wxMessageDialog ask(
+                this,
+                wxString::Format(_("Trust the authors of %s?\n\nIts configuration "
+                                   "will be honoured from now on."),
+                                 repomancer::gui::sanitized_utf8(key)),
+                _("Trust Repository"), wxYES_NO | wxNO_DEFAULT | wxICON_AUTH_NEEDED);
+            if (ask.ShowModal() != wxID_YES) {
+                return;
+            }
+            auto settings = repomancer::load_settings();
+            remember_trusted_repo(settings, key);
+            repomancer::save_settings(settings);
+            session_read_only_.erase(key);
+            git_config_.trust = repomancer::vcs::git::RepoTrust::Trusted;
+            git_config_.extra_neutralize.clear();
+            repo_read_only_ = false;
+            ReloadRepository();
+        },
+        ID_TrustRepo);
     Bind(
         wxEVT_MENU,
         [this](wxCommandEvent& event) {
@@ -522,18 +620,26 @@ MainFrame::MainFrame() {
                 item->GetId());
         };
         const auto at = static_cast<std::size_t>(row);
+        if (at >= changed_files_.size()) {
+            return;
+        }
         if (worktree_mode_ && at < worktree_entries_.size()) {
+            // The path is captured by VALUE: the popup runs a nested event
+            // loop in which a pending refresh may rebuild the list, so a row
+            // index would be stale by action time.
             const auto& entry = worktree_entries_[at];
+            const std::string wt_path = entry.path;
             const bool staged =
                 entry.kind == repomancer::vcs::EntryKind::Ordinary && entry.x != '.';
             const bool stageable = entry.kind == repomancer::vcs::EntryKind::Untracked ||
                                    entry.y != '.';
             if (stageable) {
-                add(_("&Stage"), nullptr, [this, at] { StageWorktreeFile(at, true); });
+                add(_("&Stage"), nullptr,
+                    [this, wt_path] { StageWorktreeFile(wt_path, true); });
             }
             if (staged) {
                 add(_("&Unstage"), nullptr,
-                    [this, at] { StageWorktreeFile(at, false); });
+                    [this, wt_path] { StageWorktreeFile(wt_path, false); });
             }
             const bool any_staged = std::any_of(
                 worktree_entries_.begin(), worktree_entries_.end(), [](const auto& e) {
@@ -542,19 +648,26 @@ MainFrame::MainFrame() {
             if (any_staged) {
                 add(_("&Commit Staged Changes…"), nullptr, [this] { CommitStaged(); });
             }
-            if (stageable || staged || any_staged) {
-                menu.AppendSeparator();
+            // Whole-file discard is defined for plain edits and untracked
+            // files. On a staged rename `git restore` would delete the new
+            // name and leave a half-staged deletion — worse than no button.
+            if (entry.kind == repomancer::vcs::EntryKind::Ordinary ||
+                entry.kind == repomancer::vcs::EntryKind::Untracked) {
+                add(_("&Discard Changes…"), nullptr,
+                    [this, wt_path] { DiscardFile(wt_path); });
             }
+            menu.AppendSeparator();
         }
+        const std::string file_path = changed_files_[at].path;
         add(_("&Open file"), repomancer::gui::icons::kFile,
-            [this, at] { OpenChangedFile(at); });
+            [this, file_path] { OpenChangedFile(file_path); });
         add(_("Open containing &folder"), repomancer::gui::icons::kFolder,
-            [this, at] { OpenContainingFolder(at); });
+            [this, file_path] { OpenContainingFolder(file_path); });
         menu.AppendSeparator();
         add(_("File &History…"), repomancer::gui::icons::kClock4,
-            [this, at] { ShowFileHistory(at); });
+            [this, file_path] { ShowFileHistory(file_path); });
         add(_("&Blame…"), repomancer::gui::icons::kSearch,
-            [this, at] { ShowFileBlame(at); });
+            [this, file_path] { ShowFileBlame(file_path); });
         files_->PopupMenu(&menu);
     });
 }
@@ -592,10 +705,32 @@ wxString worktree_change_label(const repomancer::vcs::StatusEntry& entry) {
     }
 }
 
+void CopyToClipboard(const wxString& text) {
+    if (wxTheClipboard->Open()) {
+        wxTheClipboard->SetData(new wxTextDataObject(text));
+        wxTheClipboard->Close();
+    }
+}
+
 } // namespace
 
 void MainFrame::ReloadRepository() {
+    // Completion callbacks reach for this while another load may be in
+    // flight (e.g. a fetch finishing during the trust-gate dialog); a reload
+    // must never stack on a running one.
+    if (busy_.load()) {
+        return;
+    }
     LoadRepository(wxString::FromUTF8(repo_path_.string()));
+}
+
+bool MainFrame::RepoWritable() {
+    if (!repo_read_only_) {
+        return true;
+    }
+    SetStatusText(_("Repository is open read-only — Repository ▸ Trust This "
+                    "Repository to enable changes"));
+    return false;
 }
 
 void MainFrame::ShowWorktree() {
@@ -666,11 +801,10 @@ void MainFrame::ShowWorktree() {
         });
 }
 
-void MainFrame::StageWorktreeFile(std::size_t index, bool stage) {
-    if (index >= worktree_entries_.size()) {
+void MainFrame::StageWorktreeFile(const std::string& path, bool stage) {
+    if (!RepoWritable()) {
         return;
     }
-    const std::string path = worktree_entries_[index].path;
     RunGitOp(
         _("Staging failed: "),
         [path, stage](const std::filesystem::path& repo,
@@ -682,6 +816,9 @@ void MainFrame::StageWorktreeFile(std::size_t index, bool stage) {
 }
 
 void MainFrame::CommitStaged() {
+    if (!RepoWritable()) {
+        return;
+    }
     const int staged = static_cast<int>(std::count_if(
         worktree_entries_.begin(), worktree_entries_.end(), [](const auto& e) {
             return e.kind == repomancer::vcs::EntryKind::Ordinary && e.x != '.';
@@ -735,6 +872,9 @@ void MainFrame::OnBranchMenu(const wxString& branch) {
 }
 
 void MainFrame::SwitchBranch(const std::string& branch) {
+    if (!RepoWritable()) {
+        return;
+    }
     SetStatusText(wxString::Format(_("Switching to %s…"), wxString::FromUTF8(branch)));
     RunGitOp(
         _("Switch failed: "),
@@ -746,6 +886,9 @@ void MainFrame::SwitchBranch(const std::string& branch) {
 }
 
 void MainFrame::CreateBranch(const std::string& branch) {
+    if (!RepoWritable()) {
+        return;
+    }
     RunGitOp(
         _("Branch creation failed: "),
         [branch](const std::filesystem::path& repo,
@@ -753,6 +896,273 @@ void MainFrame::CreateBranch(const std::string& branch) {
             return GitDriver(config).create_branch(repo, branch, /*checkout=*/true);
         },
         [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::FetchRemotes() {
+    if (!RepoWritable()) {
+        return;
+    }
+    SetStatusText(_("Fetching from every remote…"));
+    RunGitOp(
+        _("Fetch failed: "),
+        [](const std::filesystem::path& repo,
+           const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).fetch(repo);
+        },
+        [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::PullCurrentBranch() {
+    if (!RepoWritable()) {
+        return;
+    }
+    SetStatusText(_("Pulling…"));
+    RunGitOp(
+        _("Pull failed: "),
+        [](const std::filesystem::path& repo,
+           const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).pull(repo);
+        },
+        [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::PushCurrentBranch() {
+    if (!RepoWritable()) {
+        return;
+    }
+    SetStatusText(_("Pushing…"));
+    RunGitOp(
+        _("Push failed: "),
+        [](const std::filesystem::path& repo,
+           const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).push(repo);
+        },
+        [this](std::string) { ReloadRepository(); /* ahead/behind moved */ });
+}
+
+void MainFrame::StashChanges() {
+    if (!RepoWritable()) {
+        return;
+    }
+    wxTextEntryDialog dialog(this, _("Message for the stash (optional):"),
+                             _("Stash Changes"));
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::string message(dialog.GetValue().Trim(true).Trim(false).utf8_str());
+    SetStatusText(_("Stashing…"));
+    RunGitOp(
+        _("Stash failed: "),
+        [message](const std::filesystem::path& repo,
+                  const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).stash_save(repo, message);
+        },
+        [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::PopStash() {
+    if (!RepoWritable()) {
+        return;
+    }
+    SetStatusText(_("Popping the newest stash…"));
+    RunGitOp(
+        _("Stash pop failed: "),
+        [](const std::filesystem::path& repo,
+           const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).stash_pop(repo);
+        },
+        [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::OnLogMenu(int row) {
+    const auto* commit = model_->commit_at(static_cast<unsigned int>(row));
+    if (commit == nullptr) {
+        return;
+    }
+    const std::string hash = commit->hash;
+    const wxString subject = repomancer::gui::sanitized_utf8(commit->subject);
+    wxMenu menu;
+    using repomancer::gui::icons::menu_icon;
+    const auto add = [&menu](const wxString& label, const char* icon,
+                             std::function<void()> action) {
+        auto* item = new wxMenuItem(&menu, wxID_ANY, label);
+        if (icon != nullptr) {
+            item->SetBitmap(menu_icon(icon));
+        }
+        menu.Append(item);
+        menu.Bind(
+            wxEVT_MENU,
+            [action = std::move(action)](wxCommandEvent&) { action(); },
+            item->GetId());
+    };
+    add(_("&Copy Hash"), repomancer::gui::icons::kHash,
+        [hash] { CopyToClipboard(wxString::FromUTF8(hash)); });
+    add(_("Copy &Subject"), repomancer::gui::icons::kFileTypeCorner,
+        [subject] { CopyToClipboard(subject); });
+    menu.AppendSeparator();
+    add(_("&Tag Here…"), repomancer::gui::icons::kTag, [this, hash] {
+        if (!RepoWritable()) {
+            return;
+        }
+        wxTextEntryDialog dialog(this, _("Name for the new tag:"), _("New Tag"));
+        if (dialog.ShowModal() != wxID_OK) {
+            return;
+        }
+        const std::string name(dialog.GetValue().Trim(true).Trim(false).utf8_str());
+        if (name.empty()) {
+            return;
+        }
+        RunGitOp(
+            _("Tag creation failed: "),
+            [name, hash](const std::filesystem::path& repo,
+                         const repomancer::vcs::git::GitConfig& config) {
+                return GitDriver(config).create_tag(repo, name, hash);
+            },
+            [this](std::string) { ReloadRepository(); });
+    });
+    log_->canvas()->PopupMenu(&menu);
+}
+
+void MainFrame::OnHunkMenu(const repomancer::vcs::FileDiff& file, std::size_t hunk) {
+    // Hunk operations exist for working-tree changes only, and only on the
+    // plain-modification diffs the patch builder covers.
+    if (!worktree_mode_ || repo_read_only_ ||
+        !repomancer::vcs::supports_hunk_ops(file) || hunk >= file.hunks.size()) {
+        return;
+    }
+    const std::string patch = repomancer::vcs::single_hunk_patch(file, hunk);
+    if (patch.empty()) {
+        return;
+    }
+    const wxString where = wxString::Format(
+        _("%s @@ -%d,%d"), repomancer::gui::sanitized_utf8(file.new_path),
+        file.hunks[hunk].old_start, file.hunks[hunk].old_count);
+
+    wxMenu menu;
+    const auto add = [&menu](const wxString& label, std::function<void()> action) {
+        auto* item = new wxMenuItem(&menu, wxID_ANY, label);
+        menu.Append(item);
+        menu.Bind(
+            wxEVT_MENU,
+            [action = std::move(action)](wxCommandEvent&) { action(); },
+            item->GetId());
+    };
+    if (diff_is_staged_) {
+        // The pane shows HEAD-vs-index: the one defined operation is taking
+        // the hunk back out of the index.
+        add(_("&Unstage Hunk"), [this, patch] {
+            SetStatusText(_("Unstaging the hunk…"));
+            RunGitOp(
+                _("Hunk unstaging failed: "),
+                [patch](const std::filesystem::path& repo,
+                        const repomancer::vcs::git::GitConfig& config) {
+                    return GitDriver(config).apply_patch(repo, patch, /*cached=*/true,
+                                                         /*reverse=*/true);
+                },
+                [this](std::string) { ShowWorktree(); });
+        });
+        diff_->PopupMenu(&menu);
+        return;
+    }
+    add(_("&Stage Hunk"), [this, patch] {
+        SetStatusText(_("Staging the hunk…"));
+        RunGitOp(
+            _("Hunk staging failed: "),
+            [patch](const std::filesystem::path& repo,
+                    const repomancer::vcs::git::GitConfig& config) {
+                return GitDriver(config).apply_patch(repo, patch, /*cached=*/true,
+                                                     /*reverse=*/false);
+            },
+            [this](std::string) { ShowWorktree(); });
+    });
+    add(_("&Discard Hunk…"), [this, patch, where] {
+        wxMessageDialog confirm(
+            this,
+            wxString::Format(_("Discard this hunk from the working tree?\n\n%s\n\n"
+                               "The change is lost — there is no undo."),
+                             where),
+            _("Discard Hunk"), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING);
+        if (confirm.ShowModal() != wxID_YES) {
+            return;
+        }
+        SetStatusText(_("Discarding the hunk…"));
+        RunGitOp(
+            _("Hunk discard failed: "),
+            [patch](const std::filesystem::path& repo,
+                    const repomancer::vcs::git::GitConfig& config) {
+                return GitDriver(config).apply_patch(repo, patch, /*cached=*/false,
+                                                     /*reverse=*/true);
+            },
+            [this](std::string) { ShowWorktree(); });
+    });
+    diff_->PopupMenu(&menu);
+}
+
+void MainFrame::DiscardFile(const std::string& path) {
+    // The untracked branch deletes via the filesystem, not the driver, so
+    // this GUI guard is the ONLY read-only barrier on that path.
+    if (!RepoWritable()) {
+        return;
+    }
+    // Everything is read by VALUE up front: the modal below runs a nested
+    // event loop in which a pending refresh may reassign worktree_entries_,
+    // so a reference held across ShowModal could dangle or re-point.
+    const auto find = [this](const std::string& p)
+        -> const repomancer::vcs::StatusEntry* {
+        for (const auto& e : worktree_entries_) {
+            if (e.path == p) {
+                return &e;
+            }
+        }
+        return nullptr;
+    };
+    const auto* entry = find(path);
+    if (entry == nullptr) {
+        return;
+    }
+    const bool untracked = entry->kind == repomancer::vcs::EntryKind::Untracked;
+    const wxString shown = repomancer::gui::sanitized_utf8(path);
+    wxMessageDialog confirm(
+        this,
+        untracked ? wxString::Format(_("Delete the untracked file %s?\n\n"
+                                       "The file is lost — there is no undo."),
+                                     shown)
+                  : wxString::Format(_("Discard every change to %s (staged and "
+                                       "unstaged)?\n\nThe changes are lost — there "
+                                       "is no undo."),
+                                     shown),
+        _("Discard Changes"), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING);
+    if (confirm.ShowModal() != wxID_YES) {
+        return;
+    }
+    // Re-validate after the modal: the list may have refreshed while the
+    // dialog was up, and the confirmed file may be gone or changed kind.
+    entry = find(path);
+    if (entry == nullptr ||
+        untracked != (entry->kind == repomancer::vcs::EntryKind::Untracked)) {
+        SetStatusText(
+            wxString::Format(_("%s changed while the dialog was open — nothing done"),
+                             shown));
+        return;
+    }
+    if (untracked) {
+        std::error_code ec;
+        std::filesystem::remove(repo_path_ / path, ec);
+        if (ec) {
+            SetStatusText(wxString::Format(_("Could not delete %s"), shown));
+            return;
+        }
+        ShowWorktree();
+        return;
+    }
+    SetStatusText(_("Discarding changes…"));
+    RunGitOp(
+        _("Discard failed: "),
+        [path](const std::filesystem::path& repo,
+               const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).discard_file(repo, path);
+        },
+        [this](std::string) { ShowWorktree(); });
 }
 
 void MainFrame::AppendFileRow(const wxString& change, const std::string& path,
@@ -856,6 +1266,13 @@ void MainFrame::PopulateRepoDetails(
     const auto& clean = repomancer::gui::sanitized_utf8;
 
     std::vector<Row> rows;
+    if (repo_read_only_) {
+        // The one indicator that survives every status-bar update.
+        Row badge;
+        badge.text = _("Read-only — untrusted");
+        badge.heading = true;
+        rows.push_back(std::move(badge));
+    }
     const auto section = [&rows](const wxString& title) {
         if (!rows.empty()) {
             rows.push_back({});
@@ -1013,11 +1430,18 @@ void MainFrame::RestartToApplySettings() {
     // save prompts first, because Close(true) cannot be vetoed.
     Hide();
 
-    wxString command = "\"" + wxStandardPaths::Get().GetExecutablePath() + "\"";
+    // Each argument is a separate array element: wxExecute(char**) exec()s
+    // them verbatim, so a repository path containing a quote, space or
+    // backslash cannot re-tokenize into a different (already-trusted) path.
+    const wxString exe = wxStandardPaths::Get().GetExecutablePath();
+    const wxString repo = wxString::FromUTF8(repo_path_.string());
+    std::vector<const wxChar*> args;
+    args.push_back(exe.c_str());
     if (!repo_path_.empty()) {
-        command += " \"" + wxString::FromUTF8(repo_path_.string()) + "\"";
+        args.push_back(repo.c_str());
     }
-    wxExecute(command, wxEXEC_ASYNC);
+    args.push_back(nullptr);
+    wxExecute(const_cast<wxChar**>(args.data()), wxEXEC_ASYNC);
     Close(true);
 }
 
@@ -1101,12 +1525,24 @@ void MainFrame::ShowFileDiff(long index) {
     diff_worker_ = std::thread([this, generation, repo = repo_path_,
                                 commit = selected_commit_, path = file.path,
                                 worktree = worktree_mode_, config = git_config_] {
+        // Worktree files show their unstaged patch; when a file's changes
+        // are fully staged that patch is empty, so the staged patch is shown
+        // instead (and the hunk menu switches to Unstage).
+        bool staged_view = false;
         auto diff = worktree ? GitDriver(config).worktree_diff(repo, path)
                              : GitDriver(config).file_diff(repo, commit, path);
-        CallAfter([this, generation, diff = std::move(diff)] {
+        if (worktree && diff.ok() && diff.value().empty()) {
+            auto staged = GitDriver(config).staged_diff(repo, path);
+            if (staged.ok() && !staged.value().empty()) {
+                diff = std::move(staged);
+                staged_view = true;
+            }
+        }
+        CallAfter([this, generation, staged_view, diff = std::move(diff)] {
             if (generation != diff_generation_.load()) {
                 return;
             }
+            diff_is_staged_ = staged_view;
             if (!diff.ok()) {
                 diff_->ShowMessage(
                     wxString::Format(_("Could not read the diff: %s"),
@@ -1119,7 +1555,9 @@ void MainFrame::ShowFileDiff(long index) {
                                        : _("No textual changes."));
                 return;
             }
-            diff_->ShowDiff(diff.value());
+            diff_->ShowDiff(std::move(diff).value(),
+                            staged_view ? _("Staged changes (already in the index)")
+                                        : wxString());
         });
     });
 }
@@ -1202,11 +1640,7 @@ void MainFrame::OnPreferences(wxCommandEvent&) {
                                    wxString::FromUTF8(settings.git_binary)));
 }
 
-void MainFrame::ShowFileHistory(std::size_t index) {
-    if (index >= changed_files_.size()) {
-        return;
-    }
-    const std::string path = changed_files_[index].path;
+void MainFrame::ShowFileHistory(const std::string& path) {
     SetStatusText(wxString::Format(_("Reading history of %s…"),
                                    wxString::FromUTF8(path)));
     RunGitOp(
@@ -1235,11 +1669,7 @@ void MainFrame::ShowFileHistory(std::size_t index) {
         });
 }
 
-void MainFrame::ShowFileBlame(std::size_t index) {
-    if (index >= changed_files_.size()) {
-        return;
-    }
-    const std::string path = changed_files_[index].path;
+void MainFrame::ShowFileBlame(const std::string& path) {
     SetStatusText(wxString::Format(_("Reading blame of %s…"), wxString::FromUTF8(path)));
     RunGitOp(
         _("Could not read blame: "),
@@ -1262,11 +1692,8 @@ void MainFrame::ShowFileBlame(std::size_t index) {
         });
 }
 
-void MainFrame::OpenChangedFile(std::size_t index) {
-    if (index >= changed_files_.size()) {
-        return;
-    }
-    const auto file = repo_path_ / changed_files_[index].path;
+void MainFrame::OpenChangedFile(const std::string& path) {
+    const auto file = repo_path_ / path;
     std::error_code ec;
     if (!std::filesystem::exists(file, ec) || ec) {
         // Deleted in this commit, or never in the working tree.
@@ -1280,11 +1707,8 @@ void MainFrame::OpenChangedFile(std::size_t index) {
     }
 }
 
-void MainFrame::OpenContainingFolder(std::size_t index) {
-    if (index >= changed_files_.size()) {
-        return;
-    }
-    auto folder = (repo_path_ / changed_files_[index].path).parent_path();
+void MainFrame::OpenContainingFolder(const std::string& path) {
+    auto folder = (repo_path_ / path).parent_path();
     std::error_code ec;
     if (!std::filesystem::exists(folder, ec) || ec) {
         // The directory may be gone with its contents; the repository root
@@ -1339,8 +1763,78 @@ void MainFrame::OnOpenRepository(wxCommandEvent&) {
 
 void MainFrame::OpenRepository(const wxString& path) { LoadRepository(path); }
 
+void MainFrame::ComputeReadOnlyOverrides(const std::filesystem::path& repo) {
+    // Read the untrusted repo's own filter/diff drivers so make_spec can
+    // neutralize them by name. A quick config read on the UI thread, like
+    // the trust decision itself; failure just leaves the fixed set. Uses the
+    // repo being opened — repo_path_ is not assigned until later.
+    auto cfg = git_config_;
+    cfg.extra_neutralize.clear();
+    auto overrides = GitDriver(cfg).read_only_overrides(repo);
+    git_config_.extra_neutralize =
+        overrides.ok() ? std::move(overrides).value() : std::vector<std::string>{};
+}
+
 void MainFrame::LoadRepository(const wxString& path) {
-    busy_.store(true);
+    // One load at a time — and busy_ goes up BEFORE the trust dialog, whose
+    // nested event loop would otherwise let queued completions start a
+    // second load underneath it.
+    if (busy_.exchange(true)) {
+        wxBell();
+        return;
+    }
+    // §13.1 trust gate — decided BEFORE the first git subprocess touches
+    // the repository, because a hostile repo's config can name programs to
+    // execute (fsmonitor, hooks, filters) for even read commands.
+    {
+        std::error_code ec;
+        const auto canonical = std::filesystem::weakly_canonical(
+            std::filesystem::path(std::string(path.utf8_str())), ec);
+        const std::string key =
+            ec ? std::string(path.utf8_str()) : canonical.string();
+        auto settings = repomancer::load_settings();
+        if (repomancer::is_repo_trusted(settings, key)) {
+            git_config_.trust = repomancer::vcs::git::RepoTrust::Trusted;
+            git_config_.extra_neutralize.clear();
+        } else if (session_read_only_.count(key) != 0) {
+            // Already answered "Open Read-Only" this session; re-prompting
+            // on every refresh would only train the user to click through.
+            git_config_.trust = repomancer::vcs::git::RepoTrust::ReadOnly;
+            ComputeReadOnlyOverrides(
+                std::filesystem::path(std::string(path.utf8_str())));
+        } else {
+            wxMessageDialog ask(
+                this,
+                wxString::Format(
+                    _("Do you trust the authors of this repository?\n\n%s\n\n"
+                      "A repository's own configuration can instruct git to run "
+                      "programs. Until you trust it, Repomancer opens it "
+                      "read-only with that configuration neutralized."),
+                    repomancer::gui::sanitized_utf8(key)),
+                _("Open Repository"),
+                wxYES_NO | wxCANCEL | wxNO_DEFAULT | wxICON_AUTH_NEEDED);
+            ask.SetYesNoCancelLabels(_("&Trust and Open"), _("Open &Read-Only"),
+                                     _("Cancel"));
+            switch (ask.ShowModal()) {
+            case wxID_YES:
+                remember_trusted_repo(settings, key);
+                repomancer::save_settings(settings);
+                git_config_.trust = repomancer::vcs::git::RepoTrust::Trusted;
+                break;
+            case wxID_NO:
+                session_read_only_.insert(key);
+                git_config_.trust = repomancer::vcs::git::RepoTrust::ReadOnly;
+                ComputeReadOnlyOverrides(
+                    std::filesystem::path(std::string(path.utf8_str())));
+                break;
+            default:
+                busy_.store(false);
+                return; // neither trust nor curiosity today
+            }
+        }
+    }
+    repo_read_only_ =
+        git_config_.trust == repomancer::vcs::git::RepoTrust::ReadOnly;
     SetStatusText(wxString::Format(_("Loading %s…"), path));
     if (worker_.joinable()) {
         worker_.join();
@@ -1379,8 +1873,13 @@ void MainFrame::LoadRepository(const wxString& path) {
             changed_files_.clear();
             diff_->Clear();
 
-            SetStatusText(wxString::Format(_("%zu commits — %s"), count,
-                                           wxString::FromUTF8(path_utf8)));
+            wxString loaded = wxString::Format(_("%zu commits — %s"), count,
+                                               wxString::FromUTF8(path_utf8));
+            if (repo_read_only_) {
+                loaded << _("  —  READ-ONLY (untrusted; Repository ▸ Trust This "
+                            "Repository to enable changes)");
+            }
+            SetStatusText(loaded);
 
             // Land on the newest commit so the detail panes have content.
             if (count > 0) {
