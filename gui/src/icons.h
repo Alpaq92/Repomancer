@@ -280,6 +280,19 @@ inline constexpr const char* kGitBranchPlus = R"svg(<svg
          at = data.find(needle, at + hex.size())) {
         data.replace(at, needle.size(), hex);
     }
+    // Menus vertically centre the 16px icon on the row, whose height includes
+    // font descent space — so a geometrically-centred glyph reads a touch high
+    // beside menu labels, which almost all lead with a capital and have no
+    // descenders. Nudge the glyph down a fraction of a pixel within its own
+    // canvas by shifting the viewBox origin up. Doing it in the bitmap keeps it
+    // sub-pixel (a whole-pixel CSS margin can only over- or under-shoot) and
+    // uniform across platforms rather than GTK alone. The shift is 0.9px at
+    // the 16px render size, i.e. 1.35 units of the 24-unit viewBox; nothing
+    // clips (Lucide's glyphs sit within a ~2-unit padding on every edge).
+    const std::string vb_from = R"(viewBox="0 0 24 24")";
+    if (const auto at = data.find(vb_from); at != std::string::npos) {
+        data.replace(at, vb_from.size(), R"(viewBox="0 -1.35 24 24")");
+    }
     return wxBitmapBundle::FromSVG(data.c_str(), wxSize(16, 16));
 }
 
