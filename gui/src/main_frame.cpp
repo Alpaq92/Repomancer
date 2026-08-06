@@ -144,7 +144,7 @@ MainFrame::MainFrame() {
         repo_menu, ID_TrustRepo, _("Trust This Repositor&y"),
         _("Allow this repository's configuration and enable changes"));
     trust_item->SetBitmap(
-        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kShieldCheck));
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kHeartHandshake));
     repo_menu->Append(trust_item);
 
     auto* theme_menu = new wxMenu;
