@@ -639,6 +639,13 @@ TEST_CASE("git integration: hunk ops round-trip CRLF and no-newline files",
     }
 
     SECTION("non-ASCII paths round-trip (quotepath off)") {
+#ifdef _WIN32
+        // A narrow "na\u00efve.txt" source literal is encoded differently
+        // than git's UTF-8 view of the filename on Windows, so `git add`
+        // cannot find the file this harness creates. The product's UTF-8
+        // path handling is exercised on POSIX.
+        SKIP("non-ASCII filename harness is POSIX-specific");
+#else
         std::ofstream(repo.path() / "na\u00efve.txt") << "x\ny\n";
         raw_git(repo.path(), {"add", "na\u00efve.txt"});
         raw_git(repo.path(), {"commit", "--quiet", "-m", "utf8 baseline"});
@@ -653,6 +660,7 @@ TEST_CASE("git integration: hunk ops round-trip CRLF and no-newline files",
                     .apply_patch(repo.path(), single_hunk_patch(diff.value()[0], 0),
                                  /*cached=*/true, /*reverse=*/false)
                     .ok());
+#endif
     }
 }
 
@@ -661,6 +669,11 @@ TEST_CASE("git integration: literal pathspecs defuse magic-named files",
     if (!FixtureRepo::git_available()) {
         SKIP("git not found on PATH");
     }
+#ifdef _WIN32
+    // ":(glob)*" contains ':' and '*', which are illegal in a Windows
+    // filename — the pathspec-magic attack cannot be constructed here.
+    SKIP("magic-named files require a POSIX filename");
+#else
     FixtureRepo repo;
     GitDriver driver;
     raw_git(repo.path(), {"stash", "push", "--include-untracked", "-m", "park"});
@@ -684,6 +697,7 @@ TEST_CASE("git integration: literal pathspecs defuse magic-named files",
     const auto* victim = find_entry(status.value(), "victim.txt");
     REQUIRE(victim != nullptr); // the other edit SURVIVED
     CHECK(victim->y == 'M');
+#endif
 }
 
 TEST_CASE("git integration: option-looking user strings stay data",
@@ -856,6 +870,12 @@ TEST_CASE("git integration: without overrides a filter WOULD run (guard is real)
     if (!FixtureRepo::git_available()) {
         SKIP("git not found on PATH");
     }
+#ifdef _WIN32
+    // The proof filter "touch <path>; cat" is POSIX shell, and the Windows
+    // marker path (backslashes) does not survive git's sh filter context.
+    // The neutralization itself is platform-agnostic driver code.
+    SKIP("the load-bearing-filter proof is POSIX-shell-specific");
+#else
     FixtureRepo repo;
     const auto flt = repo.path() / "PWNED_FILTER";
     raw_git(repo.path(),
@@ -868,4 +888,5 @@ TEST_CASE("git integration: without overrides a filter WOULD run (guard is real)
     (void)GitDriver(trusted).worktree_diff(repo.path(), "a.txt");
     std::error_code ec;
     CHECK(std::filesystem::exists(flt, ec));
+#endif
 }
