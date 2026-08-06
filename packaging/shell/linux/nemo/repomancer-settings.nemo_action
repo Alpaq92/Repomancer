@@ -1,8 +1,8 @@
 [Nemo Action]
 Name=Repomancer: Settings…
 Comment=Open Repomancer preferences
+Icon-Name=repomancer-settings-symbolic
 Exec=@REPOMANCER_BIN@ --action=settings %F
-Icon-Name=repomancer-settings
 Selection=any
 Extensions=dir;
 Dependencies=@REPOMANCER_BIN@

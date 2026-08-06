@@ -1,8 +1,8 @@
 [Nemo Action]
 Name=Repomancer: Log…
 Comment=Open the commit history in Repomancer
+Icon-Name=repomancer-log-symbolic
 Exec=@REPOMANCER_BIN@ --action=log %F
-Icon-Name=repomancer-log
 Selection=any
 Extensions=dir;
 Dependencies=@REPOMANCER_BIN@

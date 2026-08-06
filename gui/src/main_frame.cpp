@@ -23,6 +23,7 @@
 #include <wx/aui/dockart.h>
 #include <wx/clipbrd.h>
 #include <wx/dcclient.h>
+#include <wx/process.h>
 #include <wx/dirdlg.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
@@ -694,8 +695,8 @@ MainFrame::MainFrame() {
         const std::string file_path = changed_files_[at].path;
         add(_("&Open file"), repomancer::gui::icons::kFile,
             [this, file_path] { OpenChangedFile(file_path); });
-        add(_("Open containing &folder"), repomancer::gui::icons::kFolder,
-            [this, file_path] { OpenContainingFolder(file_path); });
+        add(_("Show in File &Manager"), repomancer::gui::icons::kFolder,
+            [this, file_path] { RevealInFileManager(file_path); });
         menu.AppendSeparator();
         add(_("File &History…"), repomancer::gui::icons::kClock4,
             [this, file_path] { ShowFileHistory(file_path); });
@@ -743,6 +744,47 @@ void CopyToClipboard(const wxString& text) {
         wxTheClipboard->SetData(new wxTextDataObject(text));
         wxTheClipboard->Close();
     }
+}
+
+// Runs `on_fail` when the spawned process exits non-zero — so a reveal via
+// gdbus that fails (no FileManager1 service registered) still degrades to
+// opening the folder. wxEXEC_ASYNC only reports the launch, not the exit
+// code, so we need the terminate callback. Self-deletes.
+class FallbackProcess : public wxProcess {
+public:
+    explicit FallbackProcess(std::function<void()> on_fail)
+        : on_fail_(std::move(on_fail)) {}
+    void OnTerminate(int, int status) override {
+        if (status != 0 && on_fail_) {
+            on_fail_();
+        }
+        delete this;
+    }
+
+private:
+    std::function<void()> on_fail_;
+};
+
+// RFC 3986 percent-encoding for a file:// URI path (keeps '/' and the
+// unreserved set). The input is UTF-8 bytes.
+std::string percent_encode_path(const std::string& path) {
+    static const char* kHex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(path.size());
+    for (const unsigned char ch : path) {
+        const bool unreserved = (ch >= 'A' && ch <= 'Z') ||
+                                (ch >= 'a' && ch <= 'z') ||
+                                (ch >= '0' && ch <= '9') || ch == '-' ||
+                                ch == '_' || ch == '.' || ch == '~' || ch == '/';
+        if (unreserved) {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            out.push_back('%');
+            out.push_back(kHex[ch >> 4]);
+            out.push_back(kHex[ch & 0xF]);
+        }
+    }
+    return out;
 }
 
 } // namespace
@@ -1904,18 +1946,74 @@ void MainFrame::OpenChangedFile(const std::string& path) {
     }
 }
 
-void MainFrame::OpenContainingFolder(const std::string& path) {
-    auto folder = (repo_path_ / path).parent_path();
+void MainFrame::RevealInFileManager(const std::string& path) {
     std::error_code ec;
-    if (!std::filesystem::exists(folder, ec) || ec) {
-        // The directory may be gone with its contents; the repository root
-        // always exists.
-        folder = repo_path_;
+    const std::filesystem::path full = repo_path_ / path;
+    const bool file_exists = std::filesystem::exists(full, ec) && !ec;
+
+    // The folder to fall back to (opened if revealing the file fails); a
+    // value the async terminate callback can safely capture.
+    std::filesystem::path folder = (repo_path_ / path).parent_path();
+    if (std::error_code fe; !std::filesystem::exists(folder, fe) || fe) {
+        folder = repo_path_; // the root always exists
     }
-    if (!wxLaunchDefaultApplication(wxString::FromUTF8(folder.string()))) {
-        SetStatusText(wxString::Format(_("No application could open %s"),
-                                       wxString::FromUTF8(folder.string())));
+    const wxString folder_path = wxString::FromUTF8(folder.string());
+    const auto open_folder = [this, folder_path] {
+        if (!wxLaunchDefaultApplication(folder_path)) {
+            SetStatusText(wxString::Format(_("No application could open %s"),
+                                           folder_path));
+        }
+    };
+
+    if (!file_exists) {
+        open_folder(); // nothing to select — just open the folder
+        return;
     }
+
+#if defined(_WIN32)
+    // explorer selects the item; the PATH must be quoted (not the whole
+    // "/select,path" token) or a path with spaces opens the default view.
+    // A Windows path cannot contain a double quote, so this is unambiguous.
+    const wxString command =
+        "explorer.exe /select,\"" + wxString::FromUTF8(full.string()) + "\"";
+    wxExecute(command, wxEXEC_ASYNC);
+#elif defined(__APPLE__)
+    const wxString exe = "/usr/bin/open";
+    const wxString flag = "-R";
+    const wxString target = wxString::FromUTF8(full.string());
+    const wxChar* argv[] = {exe.wx_str(), flag.wx_str(), target.wx_str(), nullptr};
+    wxExecute(const_cast<wxChar**>(argv), wxEXEC_ASYNC);
+#else
+    // Linux: the freedesktop FileManager1 interface selects the item in
+    // whatever file manager is registered. The URI is percent-encoded, so it
+    // holds no quotes — the GVariant array literal is safe to build inline.
+    // A terminate callback falls back to opening the folder if gdbus is
+    // missing OR no FileManager1 service answers (a non-zero exit).
+    const std::string uri = "file://" + percent_encode_path(full.string());
+    const wxString array = "['" + wxString::FromUTF8(uri) + "']";
+    wxString cmd[] = {"gdbus",
+                      "call",
+                      "--session",
+                      "--dest",
+                      "org.freedesktop.FileManager1",
+                      "--object-path",
+                      "/org/freedesktop/FileManager1",
+                      "--method",
+                      "org.freedesktop.FileManager1.ShowItems",
+                      array,
+                      ""};
+    std::vector<const wxChar*> argv;
+    argv.reserve(std::size(cmd) + 1);
+    for (const auto& part : cmd) {
+        argv.push_back(part.wx_str());
+    }
+    argv.push_back(nullptr);
+    auto* proc = new FallbackProcess(open_folder);
+    if (wxExecute(const_cast<wxChar**>(argv.data()), wxEXEC_ASYNC, proc) <= 0) {
+        delete proc; // launch failed outright — OnTerminate will not fire
+        open_folder();
+    }
+#endif
 }
 
 void MainFrame::RebuildRecentMenu() {
@@ -1969,13 +2067,50 @@ MainFrame::StartupActionFromString(const std::string& name) {
     if (name == "settings") {
         return StartupAction::Settings;
     }
+    if (name == "history") {
+        return StartupAction::History;
+    }
+    if (name == "blame") {
+        return StartupAction::Blame;
+    }
     return StartupAction::None; // "log" and anything else: the default view
 }
 
 void MainFrame::RunStartupAction() {
-    // One-shot: a later reload must not re-fire the launch action.
-    const StartupAction action = startup_action_;
+    if (startup_action_ == StartupAction::None) {
+        return;
+    }
+    // Defer until the frame is genuinely active: a wxDataViewCtrl-backed
+    // modal (History/Blame) only maps once the window is activated by the WM.
+    deferred_action_ = startup_action_;
+    deferred_target_ = startup_target_file_;
     startup_action_ = StartupAction::None;
+    startup_target_file_.clear();
+    Bind(wxEVT_ACTIVATE, &MainFrame::OnStartupActivate, this);
+    // Cover the case where the window is already active (activate won't fire).
+    CallAfter([this] {
+        if (IsActive()) {
+            MaybeDispatchStartup();
+        }
+    });
+}
+
+void MainFrame::OnStartupActivate(wxActivateEvent& event) {
+    event.Skip();
+    if (event.GetActive()) {
+        MaybeDispatchStartup();
+    }
+}
+
+void MainFrame::MaybeDispatchStartup() {
+    const StartupAction action = deferred_action_;
+    if (action == StartupAction::None) {
+        return; // already dispatched (one-shot)
+    }
+    const std::string target = deferred_target_;
+    deferred_action_ = StartupAction::None;
+    deferred_target_.clear();
+    Unbind(wxEVT_ACTIVATE, &MainFrame::OnStartupActivate, this);
     switch (action) {
     case StartupAction::Commit:
         ShowWorktree();
@@ -1986,9 +2121,60 @@ void MainFrame::RunStartupAction() {
     case StartupAction::Settings:
         OpenPreferences();
         break;
+    case StartupAction::History:
+        if (!target.empty()) {
+            ShowFileHistory(target);
+        }
+        break;
+    case StartupAction::Blame:
+        if (!target.empty()) {
+            ShowFileBlame(target);
+        }
+        break;
     case StartupAction::None:
         break;
     }
+}
+
+void MainFrame::StartFromCommandLine(const wxString& path, StartupAction action) {
+    std::error_code ec;
+    const std::filesystem::path given(std::string(path.utf8_str()));
+
+    // Walk up from the given path for a .git — so a subfolder or a file
+    // inside a working tree resolves to (and opens) its repository root.
+    std::filesystem::path dir =
+        std::filesystem::is_directory(given, ec) ? given : given.parent_path();
+    std::filesystem::path root;
+    for (std::filesystem::path p = std::filesystem::absolute(dir, ec);;
+         p = p.parent_path()) {
+        std::error_code de;
+        if (std::filesystem::exists(p / ".git", de) && !de) {
+            root = p;
+            break;
+        }
+        if (p == p.parent_path()) {
+            break; // reached the filesystem root without finding one
+        }
+    }
+    if (root.empty()) {
+        root = given; // not in a repo; LoadRepository will surface the error
+    }
+
+    startup_action_ = action;
+    startup_target_file_.clear();
+    if (!std::filesystem::is_directory(given, ec) && !root.empty()) {
+        // The repo-relative path git wants (forward slashes).
+        startup_target_file_ =
+            std::filesystem::relative(given, root, ec).generic_string();
+        // A symlink between root and the file can yield a path that escapes
+        // the repo ("../…"); never hand git a bogus target.
+        if (ec || startup_target_file_.empty() ||
+            startup_target_file_.rfind("..", 0) == 0 ||
+            startup_target_file_.front() == '/') {
+            startup_target_file_.clear();
+        }
+    }
+    OpenRepository(wxString::FromUTF8(root.string()));
 }
 
 void MainFrame::OpenRepository(const wxString& path) { LoadRepository(path); }

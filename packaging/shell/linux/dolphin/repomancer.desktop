@@ -1,7 +1,6 @@
 [Desktop Entry]
 Type=Application
 Name=Repomancer
-Icon=repomancer
 MimeType=inode/directory;
 Actions=Log;Commit;Sync;Settings;
 X-KDE-Submenu=Repomancer
@@ -9,20 +8,20 @@ X-KDE-Priority=TopLevel
 
 [Desktop Action Log]
 Name=Log…
-Icon=repomancer-log
+Icon=repomancer-log-symbolic
 Exec=@REPOMANCER_BIN@ --action=log %f
 
 [Desktop Action Commit]
 Name=Commit…
-Icon=repomancer-commit
+Icon=repomancer-commit-symbolic
 Exec=@REPOMANCER_BIN@ --action=commit %f
 
 [Desktop Action Sync]
 Name=Sync (Fetch)…
-Icon=repomancer-sync
+Icon=repomancer-sync-symbolic
 Exec=@REPOMANCER_BIN@ --action=sync %f
 
 [Desktop Action Settings]
 Name=Settings…
-Icon=repomancer-settings
+Icon=repomancer-settings-symbolic
 Exec=@REPOMANCER_BIN@ --action=settings %f

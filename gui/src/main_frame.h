@@ -47,7 +47,7 @@ public:
 
     // Tier-0 shell menus launch us with an action against a folder. None is
     // the plain "open and show the log" default.
-    enum class StartupAction { None, Commit, Sync, Settings };
+    enum class StartupAction { None, Commit, Sync, Settings, History, Blame };
     [[nodiscard]] static StartupAction StartupActionFromString(const std::string& name);
 
     // Used by the CLI entry point and by shell-menu invocations.
@@ -55,8 +55,16 @@ public:
     void SetStartupAction(StartupAction action) { startup_action_ = action; }
     void OpenPreferences(); // settings action, also usable without a repo
 
+    // Launch from the shell: `path` may be a repository, a subfolder, or a
+    // file inside one. The enclosing repository is resolved and opened, and
+    // `action` runs once it loads — file actions (History/Blame) act on the
+    // file, folder actions (Log/Commit/Sync) on its repository.
+    void StartFromCommandLine(const wxString& path, StartupAction action);
+
 private:
-    void RunStartupAction(); // dispatched once the repository has loaded
+    void RunStartupAction(); // scheduled once the repository has loaded
+    void OnStartupActivate(wxActivateEvent& event);
+    void MaybeDispatchStartup(); // opens the (possibly modal) action when active
 
     void OnOpenRepository(wxCommandEvent& event);
     void OnThemeSelected(wxCommandEvent& event);
@@ -76,7 +84,7 @@ private:
     // default application.
     void OpenChangedFile(const std::string& path);
     // Opens the file's directory in the system file manager.
-    void OpenContainingFolder(const std::string& path);
+    void RevealInFileManager(const std::string& path);
     void OnFileSelected(wxDataViewEvent& event);
 
     void LoadRepository(const wxString& path);
@@ -214,6 +222,9 @@ private:
     bool repo_read_only_ = false; // §13.1: the open repo is untrusted
     bool merging_ = false;        // a merge is in progress (MERGE_HEAD exists)
     StartupAction startup_action_ = StartupAction::None;
+    std::string startup_target_file_;      // repo-relative file for History/Blame
+    StartupAction deferred_action_ = StartupAction::None;
+    std::string deferred_target_;
     // Repos the user chose "Open Read-Only" for THIS session: the gate
     // auto-answers instead of re-prompting on every reload.
     std::set<std::string> session_read_only_;

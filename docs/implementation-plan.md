@@ -294,6 +294,8 @@ per-platform installers.
   ✅ `packaging/shell/macos/README.md` (Shortcuts recipe; FinderSync is the Tier-1 upgrade).
 
 ### Tier 1 — proper context menus (M6)
+**Linux Nautilus/Nemo MenuProvider — ✅ first cut shipped** (`packaging/shell/linux/{nemo,nautilus}-python/repomancer.py`): a proper cascading "Repomancer" submenu on files, subfolders and repo roots, **state-aware** (only inside a git working tree; "Resolve Conflicts…" only while MERGE_HEAD exists) via fast filesystem checks — no git subprocess in the menu path. File-scoped **File History / Blame** plus repo **Log / Commit / Sync / Settings**, launching `repomancer --action=<verb> <path>` (the app walks up to the enclosing repo). `install.sh` prefers this over the Tier-0 static actions when `nemo-python`/`nautilus-python` is present, and removes the static ones to avoid duplicates. Icons are the app's Lucide glyphs outlined into fill-based `-symbolic` icons so the file manager recolours them to its own text colour (adapts light/dark). **Reverse direction ("Show in File Manager") — ✅** via `org.freedesktop.FileManager1.ShowItems` (reveal-and-select), with `explorer /select` (Windows) and `open -R` (macOS). Statusd-backed state and emblems/overlays remain Tier-2 (M7). Verified live on Nemo. Remaining Tier-1 below is native per-platform work.
+
 - **Windows — one DLL, both menu systems** (goal: full experience on old Windows *and* the
   Win11 compressed menu; NanaZip/PowerToys precedent):
   - The single dependency-free C++ COM DLL (static CRT) implements **both**

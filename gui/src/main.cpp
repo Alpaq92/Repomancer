@@ -61,7 +61,9 @@ public:
         frame->SetStartupAction(action_);
         frame->Show();
         if (!repo_path_.empty()) {
-            frame->OpenRepository(repo_path_);
+            // Resolves the enclosing repo (the path may be a repo, a
+            // subfolder, or a file) and runs the action once it loads.
+            frame->StartFromCommandLine(repo_path_, action_);
         } else if (action_ == MainFrame::StartupAction::Settings) {
             frame->OpenPreferences();
         }
