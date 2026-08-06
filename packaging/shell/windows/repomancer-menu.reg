@@ -1,0 +1,53 @@
+Windows Registry Editor Version 5.00
+
+; Repomancer Tier-0 shell menu — a cascading "Repomancer" entry on folders and
+; folder backgrounds. Paths use doubled backslashes; @REPOMANCER_BIN@ is
+; replaced with the installed exe path by install.ps1. Delete these keys to
+; uninstall (or run install.ps1 -Uninstall).
+
+; --- Right-click ON a folder ---
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer]
+"MUIVerb"="Repomancer"
+"Icon"="@REPOMANCER_BIN@,0"
+"SubCommands"=""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer\shell\01log]
+"MUIVerb"="Log"
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer\shell\01log\command]
+@="\"@REPOMANCER_BIN@\" --action=log \"%1\""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer\shell\02commit]
+"MUIVerb"="Commit"
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer\shell\02commit\command]
+@="\"@REPOMANCER_BIN@\" --action=commit \"%1\""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer\shell\03sync]
+"MUIVerb"="Sync (Fetch)"
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer\shell\03sync\command]
+@="\"@REPOMANCER_BIN@\" --action=sync \"%1\""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer\shell\04settings]
+"MUIVerb"="Settings"
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell\Repomancer\shell\04settings\command]
+@="\"@REPOMANCER_BIN@\" --action=settings"
+
+; --- Right-click on the folder BACKGROUND (empty space inside a folder) ---
+[HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\Repomancer]
+"MUIVerb"="Repomancer"
+"Icon"="@REPOMANCER_BIN@,0"
+"SubCommands"=""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\Repomancer\shell\01log]
+"MUIVerb"="Log"
+[HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\Repomancer\shell\01log\command]
+@="\"@REPOMANCER_BIN@\" --action=log \"%V\""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\Repomancer\shell\02commit]
+"MUIVerb"="Commit"
+[HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\Repomancer\shell\02commit\command]
+@="\"@REPOMANCER_BIN@\" --action=commit \"%V\""
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\Repomancer\shell\03sync]
+"MUIVerb"="Sync (Fetch)"
+[HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\Repomancer\shell\03sync\command]
+@="\"@REPOMANCER_BIN@\" --action=sync \"%V\""

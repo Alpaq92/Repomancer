@@ -30,6 +30,7 @@ struct Settings {
     // Preferences → VCS Providers: the git executable to run. "git" means
     // PATH lookup; anything else is used as given.
     std::string git_binary = "git";
+    std::string merge_tool;  // git mergetool --tool name; empty = git's default
     // Preferences → Interface: the wxbf integrated title bar (Windows/Linux).
     // Applied at startup; toggling restarts the frame.
     bool integrated_titlebar = true;

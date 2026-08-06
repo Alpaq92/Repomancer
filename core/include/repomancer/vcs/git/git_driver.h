@@ -15,10 +15,18 @@
 #include <repomancer/vcs/refs.h>
 #include <repomancer/vcs/stats.h>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 
 namespace repomancer::vcs::git {
+
+// Options for a commit — mapped to git's --amend / --signoff / -S.
+struct CommitOptions {
+    bool amend = false;    // replace HEAD instead of adding a commit
+    bool signoff = false;  // append a Signed-off-by trailer
+    bool gpg_sign = false; // sign with the configured key (-S)
+};
 
 // §13.1 repo trust gate. A repository the user has not vouched for runs
 // READ-ONLY: every mutating driver method refuses up front, and the
@@ -88,9 +96,42 @@ public:
                                                  const std::string& path) const;
 
     // Commits the staged changes. The message travels on stdin (--file=-),
-    // never argv (§13.1).
+    // never argv (§13.1). `options` map to --amend / --signoff / -S.
     [[nodiscard]] VcsResult<std::string> commit(const std::filesystem::path& repo,
-                                                const std::string& message) const;
+                                                const std::string& message,
+                                                const CommitOptions& options = {}) const;
+
+    // HEAD's full commit message (%B) — used to seed an amend. Empty result
+    // string before the first commit.
+    [[nodiscard]] VcsResult<std::string> head_message(
+        const std::filesystem::path& repo) const;
+
+    // Merges `branch` into the current branch. `no_ff` forces a merge
+    // commit even for fast-forwards. On conflicts git exits non-zero and
+    // leaves the merge in progress (status().merging becomes true, with
+    // Unmerged entries); the caller inspects status rather than the message.
+    [[nodiscard]] VcsResult<std::string> merge(const std::filesystem::path& repo,
+                                               const std::string& branch,
+                                               bool no_ff) const;
+
+    // Aborts an in-progress merge, restoring the pre-merge state.
+    [[nodiscard]] VcsResult<std::string> merge_abort(
+        const std::filesystem::path& repo) const;
+
+    // Resolves one conflicted path by taking one whole side: `ours` keeps the
+    // current branch's version, otherwise the merged-in version. The path is
+    // then staged (marked resolved). Path guarded behind `--`.
+    [[nodiscard]] VcsResult<std::string> checkout_conflict(
+        const std::filesystem::path& repo, const std::string& path, bool ours) const;
+
+    // Launches an external 3-way merge tool on one conflicted path via
+    // `git mergetool --no-prompt`. `tool` (empty = git's configured
+    // merge.tool) selects it; git prepares BASE/LOCAL/REMOTE, waits for the
+    // tool to exit, and stages the result on success. The call BLOCKS for the
+    // whole editing session, so it wants a long timeout on the RunSpec.
+    [[nodiscard]] VcsResult<std::string> resolve_with_tool(
+        const std::filesystem::path& repo, const std::string& path,
+        const std::string& tool) const;
 
     // Checks out `branch` (switch). Fails cleanly when the working tree is
     // in the way; the caller surfaces git's own message.
@@ -106,9 +147,19 @@ public:
     // (GIT_TERMINAL_PROMPT=0): missing credentials fail fast with git's own
     // message rather than hanging on a hidden prompt. `pull` is --ff-only —
     // a divergent branch is surfaced, never silently merged.
-    [[nodiscard]] VcsResult<std::string> fetch(const std::filesystem::path& repo) const;
-    [[nodiscard]] VcsResult<std::string> pull(const std::filesystem::path& repo) const;
-    [[nodiscard]] VcsResult<std::string> push(const std::filesystem::path& repo) const;
+    //
+    // A non-empty `sink` streams git's --progress output (which goes to
+    // stderr) live; `cancel`, when it flips true, stops the transfer and the
+    // result is Cancelled. Both default off for a plain blocking call.
+    [[nodiscard]] VcsResult<std::string> fetch(
+        const std::filesystem::path& repo, const proc::ChunkSink& sink = {},
+        const std::atomic<bool>* cancel = nullptr) const;
+    [[nodiscard]] VcsResult<std::string> pull(
+        const std::filesystem::path& repo, const proc::ChunkSink& sink = {},
+        const std::atomic<bool>* cancel = nullptr) const;
+    [[nodiscard]] VcsResult<std::string> push(
+        const std::filesystem::path& repo, const proc::ChunkSink& sink = {},
+        const std::atomic<bool>* cancel = nullptr) const;
 
     // Stashes the tracked changes (stash push). The message is argv-safe:
     // it rides as -m's own argument, which git consumes whole.

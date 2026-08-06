@@ -1,0 +1,8 @@
+[Nemo Action]
+Name=Repomancer: Sync (Fetch)…
+Comment=Fetch from the remotes
+Exec=@REPOMANCER_BIN@ --action=sync %F
+Icon-Name=repomancer-sync
+Selection=any
+Extensions=dir;
+Dependencies=@REPOMANCER_BIN@

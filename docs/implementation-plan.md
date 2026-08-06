@@ -277,12 +277,21 @@ cache per row shape. Do this before Windows QA.
 
 Phasing (stack-independent logic lives in statusd; see §2 IPC).
 
-### Tier 0 — days, zero/near-zero code (ship with M2)
+### Tier 0 — days, zero/near-zero code (ship with M2) ✅ shipped
+The app accepts `--action=<log|commit|sync|settings> <path>` (gui/src/main.cpp
+→ MainFrame::StartupAction); the menu entries live in `packaging/shell/` with
+per-platform installers.
 - **Windows:** registry static verbs with `SubCommands` cascade ("Repomancer ▸ Commit / Log /
   Sync / Settings") → top-level on Win10, "Show more options" on Win11.
+  ✅ `packaging/shell/windows/repomancer-menu.reg` + `install.ps1` (per-user HKCU,
+  folder and folder-background).
 - **Linux:** Dolphin **service menus** (.desktop), Thunar custom actions, Nautilus scripts dir,
-  Nemo/Caja actions.
+  Nemo/Caja actions. ✅ `packaging/shell/linux/install.sh` installs an app entry +
+  icon and menu items for whichever of Nemo / Nautilus / Dolphin / Thunar are
+  present (Dolphin uses the modern Plasma 5.26+ `Type=Application` service menu;
+  Thunar gets a ready UCA snippet). Verified live on Nemo.
 - **macOS:** Quick Actions (Shortcuts) invoking `repomancer --action=... --path=...`.
+  ✅ `packaging/shell/macos/README.md` (Shortcuts recipe; FinderSync is the Tier-1 upgrade).
 
 ### Tier 1 — proper context menus (M6)
 - **Windows — one DLL, both menu systems** (goal: full experience on old Windows *and* the

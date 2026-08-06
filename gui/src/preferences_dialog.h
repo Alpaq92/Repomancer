@@ -31,6 +31,7 @@ private:
 
     repomancer::Settings settings_;
     wxTextCtrl* git_binary_ = nullptr;
+    wxTextCtrl* merge_tool_ = nullptr;
     wxStaticText* test_result_ = nullptr;
     wxCheckBox* integrated_titlebar_ = nullptr;
     wxChoice* topbar_buttons_ = nullptr;

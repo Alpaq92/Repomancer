@@ -57,15 +57,25 @@ public:
         locale_.Init(wxLANGUAGE_DEFAULT, wxLOCALE_DONT_LOAD_DEFAULT);
 
         auto* frame = new MainFrame();
+        // A Tier-0 shell menu launches us with --action; the frame runs it
+        // once the repository has loaded (or straight away for settings).
+        frame->SetStartupAction(action_);
         frame->Show();
         if (!repo_path_.empty()) {
             frame->OpenRepository(repo_path_);
+        } else if (action_ == MainFrame::StartupAction::Settings) {
+            frame->OpenPreferences();
         }
         return true;
     }
 
     void OnInitCmdLine(wxCmdLineParser& parser) override {
         wxApp::OnInitCmdLine(parser);
+        // Tier-0 shell integration: "Repomancer ▸ Commit / Log / Sync /
+        // Settings" invoke us with --action and the folder as the path.
+        parser.AddOption("a", "action",
+                         _("log | commit | sync | settings (from a shell menu)"),
+                         wxCMD_LINE_VAL_STRING, wxCMD_LINE_PARAM_OPTIONAL);
         parser.AddParam(_("repository path"), wxCMD_LINE_VAL_STRING,
                         wxCMD_LINE_PARAM_OPTIONAL);
     }
@@ -77,12 +87,16 @@ public:
         if (parser.GetParamCount() > 0) {
             repo_path_ = parser.GetParam(0);
         }
+        if (wxString action; parser.Found("action", &action)) {
+            action_ = MainFrame::StartupActionFromString(std::string(action.utf8_str()));
+        }
         return true;
     }
 
 private:
     wxLocale locale_;
     wxString repo_path_;
+    MainFrame::StartupAction action_ = MainFrame::StartupAction::None;
 };
 
 wxIMPLEMENT_APP(RepomancerApp);

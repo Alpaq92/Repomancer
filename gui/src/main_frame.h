@@ -26,6 +26,7 @@ using MainFrameBase = wxFrame;
 #include <wx/frame.h>
 #include <wx/stc/stc.h>
 
+#include <repomancer/process/process_runner.h>
 #include <repomancer/vcs/git/git_driver.h>
 #include <repomancer/vcs/refs.h>
 #include <repomancer/vcs/stats.h>
@@ -34,6 +35,7 @@ using MainFrameBase = wxFrame;
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <functional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -43,10 +45,19 @@ public:
     MainFrame();
     ~MainFrame() override;
 
-    // Used by the CLI entry point and, later, by shell-menu invocations.
+    // Tier-0 shell menus launch us with an action against a folder. None is
+    // the plain "open and show the log" default.
+    enum class StartupAction { None, Commit, Sync, Settings };
+    [[nodiscard]] static StartupAction StartupActionFromString(const std::string& name);
+
+    // Used by the CLI entry point and by shell-menu invocations.
     void OpenRepository(const wxString& path);
+    void SetStartupAction(StartupAction action) { startup_action_ = action; }
+    void OpenPreferences(); // settings action, also usable without a repo
 
 private:
+    void RunStartupAction(); // dispatched once the repository has loaded
+
     void OnOpenRepository(wxCommandEvent& event);
     void OnThemeSelected(wxCommandEvent& event);
     void OnGraphStyleSelected(wxCommandEvent& event);
@@ -79,8 +90,12 @@ private:
     // repository with the configured binary, then `done` with the value on
     // the UI thread; failures land in the status bar with git's own words.
     // Serialized on op_worker_ — the join/queue policy lives here alone.
+    // The default failure handler: the prefix plus git's own words in the
+    // status bar. `on_error` overrides it where a non-zero exit is expected
+    // and meaningful (a merge that stops on conflicts is not a hard error).
     template <typename Op, typename Done>
-    void RunGitOp(wxString failure_prefix, Op op, Done done) {
+    void RunGitOp(wxString failure_prefix, Op op, Done done,
+                  std::function<void(const repomancer::vcs::VcsError&)> on_error = {}) {
         // One op at a time — and never a UI-thread join on a LIVE worker: a
         // slow fetch would freeze the whole window for its duration. The
         // flag clears before `done` runs, so completions may chain ops.
@@ -95,14 +110,20 @@ private:
         }
         op_worker_ = std::thread([this, failure_prefix = std::move(failure_prefix),
                                   op = std::move(op), done = std::move(done),
-                                  repo = repo_path_, config = git_config_]() mutable {
+                                  on_error = std::move(on_error), repo = repo_path_,
+                                  config = git_config_]() mutable {
             auto result = op(repo, config);
             CallAfter([this, failure_prefix = std::move(failure_prefix),
-                       result = std::move(result), done = std::move(done)]() mutable {
+                       result = std::move(result), done = std::move(done),
+                       on_error = std::move(on_error)]() mutable {
                 op_running_.store(false);
                 if (!result.ok()) {
-                    SetStatusText(failure_prefix +
-                                  repomancer::gui::error_text(result.error()));
+                    if (on_error) {
+                        on_error(result.error());
+                    } else {
+                        SetStatusText(failure_prefix +
+                                      repomancer::gui::error_text(result.error()));
+                    }
                     return;
                 }
                 done(std::move(result).value());
@@ -121,12 +142,24 @@ private:
     // dialogs run nested event loops in which a pending refresh can rebuild
     // the lists, so an index captured at menu-build time may name a
     // different file by action time.
+    void RunRemoteOp(
+        const wxString& title,
+        std::function<repomancer::vcs::VcsResult<std::string>(
+            repomancer::vcs::git::GitDriver&, const std::filesystem::path&,
+            const repomancer::proc::ChunkSink&, const std::atomic<bool>*)>
+            op);
     void FetchRemotes();
     void PullCurrentBranch();
     void PushCurrentBranch();
     void StashChanges();
     void PopStash();
     void OnLogMenu(int row);
+    void MergeBranch(const std::string& branch);
+    void AbortMerge();
+    void CommitMerge();
+    void ResolveConflict(const std::string& path, bool ours);
+    void ResolveWithTool(const std::string& path);
+    void UpdateMergeState(bool merging);
     void OnHunkMenu(const repomancer::vcs::FileDiff& file, std::size_t hunk);
     void DiscardFile(const std::string& path);
     void StageWorktreeFile(const std::string& path, bool stage);
@@ -167,6 +200,8 @@ private:
     std::unique_ptr<wxMenu> view_menu_owned_;
     std::unique_ptr<wxMenu> help_menu_owned_;
     wxMenu* recent_menu_ = nullptr; // owned by the File menu
+    wxMenuItem* merge_commit_item_ = nullptr; // enabled only while merging
+    wxMenuItem* merge_abort_item_ = nullptr;
     std::vector<std::string> recent_repos_; // mirrors settings; UI reads this
     // Which git to run, resolved from Preferences → VCS Providers.
     repomancer::vcs::git::GitConfig git_config_;
@@ -177,6 +212,8 @@ private:
     bool worktree_mode_ = false;
     bool diff_is_staged_ = false; // the diff pane shows HEAD-vs-index
     bool repo_read_only_ = false; // §13.1: the open repo is untrusted
+    bool merging_ = false;        // a merge is in progress (MERGE_HEAD exists)
+    StartupAction startup_action_ = StartupAction::None;
     // Repos the user chose "Open Read-Only" for THIS session: the gate
     // auto-answers instead of re-prompting on every reload.
     std::set<std::string> session_read_only_;

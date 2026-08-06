@@ -200,7 +200,15 @@ VcsResult<StatusSnapshot> GitDriver::status(const std::filesystem::path& repo) c
     if (!run.ok()) {
         return from_run_failure(run);
     }
-    return parse_status_porcelain_v2z(run.out, config_.limits);
+    auto snapshot = parse_status_porcelain_v2z(run.out, config_.limits);
+    if (snapshot.ok()) {
+        // MERGE_HEAD exists iff a merge is underway. rev-parse exits 0 when
+        // it resolves, non-zero otherwise — a cheap, worktree-safe check.
+        const auto merge_head = proc::ProcessRunner::run(make_spec(
+            &repo, {"rev-parse", "--verify", "--quiet", "MERGE_HEAD"}));
+        snapshot.value().merging = merge_head.ok();
+    }
+    return snapshot;
 }
 
 VcsResult<std::vector<Ref>> GitDriver::refs(const std::filesystem::path& repo) const {
@@ -290,12 +298,96 @@ VcsResult<std::string> GitDriver::unstage(const std::filesystem::path& repo,
 }
 
 VcsResult<std::string> GitDriver::commit(const std::filesystem::path& repo,
-                                         const std::string& message) const {
+                                         const std::string& message,
+                                         const CommitOptions& options) const {
     if (auto refused = refuse_if_read_only(config_.trust)) {
         return *refused;
     }
-    auto spec = make_spec(&repo, {"commit", "--file=-"});
+    std::vector<std::string> args = {"commit", "--file=-"};
+    if (options.amend) {
+        args.push_back("--amend");
+    }
+    if (options.signoff) {
+        args.push_back("--signoff");
+    }
+    if (options.gpg_sign) {
+        args.push_back("--gpg-sign"); // uses user.signingkey; errors if unset
+    }
+    auto spec = make_spec(&repo, std::move(args));
     spec.stdin_data = message;
+    return run_to_string(proc::ProcessRunner::run(spec));
+}
+
+VcsResult<std::string> GitDriver::head_message(const std::filesystem::path& repo) const {
+    const auto run = proc::ProcessRunner::run(
+        make_spec(&repo, {"log", "-1", "--format=%B", "--end-of-options", "HEAD"}));
+    if (!run.ok()) {
+        return std::string{}; // no commits yet — nothing to amend
+    }
+    // Strip the single trailing newline git appends after %B.
+    std::string message = run.out;
+    if (!message.empty() && message.back() == '\n') {
+        message.pop_back();
+    }
+    return message;
+}
+
+VcsResult<std::string> GitDriver::merge(const std::filesystem::path& repo,
+                                        const std::string& branch, bool no_ff) const {
+    if (auto refused = refuse_if_read_only(config_.trust)) {
+        return *refused;
+    }
+    std::vector<std::string> args = {"merge", "--no-edit"};
+    if (no_ff) {
+        args.push_back("--no-ff");
+    }
+    args.push_back("--end-of-options");
+    args.push_back(branch);
+    return run_to_string(proc::ProcessRunner::run(make_spec(&repo, std::move(args))));
+}
+
+VcsResult<std::string> GitDriver::merge_abort(const std::filesystem::path& repo) const {
+    if (auto refused = refuse_if_read_only(config_.trust)) {
+        return *refused;
+    }
+    return run_to_string(
+        proc::ProcessRunner::run(make_spec(&repo, {"merge", "--abort"})));
+}
+
+VcsResult<std::string> GitDriver::checkout_conflict(const std::filesystem::path& repo,
+                                                    const std::string& path,
+                                                    bool ours) const {
+    if (auto refused = refuse_if_read_only(config_.trust)) {
+        return *refused;
+    }
+    // Take one whole side, then stage it as resolved. checkout's path is
+    // guarded by `--`; --end-of-options would be taken as a pathspec here.
+    const auto picked = proc::ProcessRunner::run(make_spec(
+        &repo, {"checkout", ours ? "--ours" : "--theirs", "--", path}));
+    if (!picked.ok()) {
+        return from_run_failure(picked);
+    }
+    return run_to_string(
+        proc::ProcessRunner::run(make_spec(&repo, {"add", "--end-of-options", path})));
+}
+
+VcsResult<std::string> GitDriver::resolve_with_tool(const std::filesystem::path& repo,
+                                                    const std::string& path,
+                                                    const std::string& tool) const {
+    if (auto refused = refuse_if_read_only(config_.trust)) {
+        return *refused;
+    }
+    std::vector<std::string> args = {"mergetool", "--no-prompt"};
+    if (!tool.empty()) {
+        // One argv element: the name cannot split into a separate option.
+        args.push_back("--tool=" + tool);
+    }
+    args.push_back("--");
+    args.push_back(path);
+    // The tool is a GUI session; git blocks until it exits. Give it room —
+    // the default op timeout would kill an in-progress merge.
+    auto spec = make_spec(&repo, std::move(args));
+    spec.timeout = std::chrono::hours(2);
     return run_to_string(proc::ProcessRunner::run(spec));
 }
 
@@ -322,27 +414,49 @@ VcsResult<std::string> GitDriver::create_branch(const std::filesystem::path& rep
         make_spec(&repo, {"branch", "--end-of-options", branch})));
 }
 
-VcsResult<std::string> GitDriver::fetch(const std::filesystem::path& repo) const {
-    if (auto refused = refuse_if_read_only(config_.trust)) {
-        return *refused;
+namespace {
+
+// Runs a spec either blocking or streaming, per whether a sink was given,
+// and turns the outcome into VcsResult<std::string>.
+VcsResult<std::string> run_maybe_streaming(proc::RunSpec spec,
+                                           const proc::ChunkSink& sink,
+                                           const std::atomic<bool>* cancel) {
+    if (sink) {
+        return run_to_string(proc::ProcessRunner::run_streaming(spec, sink, cancel));
     }
-    return run_to_string(
-        proc::ProcessRunner::run(make_spec(&repo, {"fetch", "--all", "--prune"})));
+    return run_to_string(proc::ProcessRunner::run(spec));
 }
 
-VcsResult<std::string> GitDriver::pull(const std::filesystem::path& repo) const {
+} // namespace
+
+VcsResult<std::string> GitDriver::fetch(const std::filesystem::path& repo,
+                                        const proc::ChunkSink& sink,
+                                        const std::atomic<bool>* cancel) const {
     if (auto refused = refuse_if_read_only(config_.trust)) {
         return *refused;
     }
-    return run_to_string(
-        proc::ProcessRunner::run(make_spec(&repo, {"pull", "--ff-only"})));
+    return run_maybe_streaming(
+        make_spec(&repo, {"fetch", "--all", "--prune", "--progress"}), sink, cancel);
 }
 
-VcsResult<std::string> GitDriver::push(const std::filesystem::path& repo) const {
+VcsResult<std::string> GitDriver::pull(const std::filesystem::path& repo,
+                                       const proc::ChunkSink& sink,
+                                       const std::atomic<bool>* cancel) const {
     if (auto refused = refuse_if_read_only(config_.trust)) {
         return *refused;
     }
-    return run_to_string(proc::ProcessRunner::run(make_spec(&repo, {"push"})));
+    return run_maybe_streaming(
+        make_spec(&repo, {"pull", "--ff-only", "--progress"}), sink, cancel);
+}
+
+VcsResult<std::string> GitDriver::push(const std::filesystem::path& repo,
+                                       const proc::ChunkSink& sink,
+                                       const std::atomic<bool>* cancel) const {
+    if (auto refused = refuse_if_read_only(config_.trust)) {
+        return *refused;
+    }
+    return run_maybe_streaming(make_spec(&repo, {"push", "--progress"}), sink,
+                               cancel);
 }
 
 VcsResult<std::string> GitDriver::stash_save(const std::filesystem::path& repo,

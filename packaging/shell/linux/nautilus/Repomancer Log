@@ -1,0 +1,5 @@
+#!/bin/sh
+# Nautilus passes the selected paths on newlines; fall back to the open folder.
+target="$(printf '%s' "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" | head -n1)"
+[ -n "$target" ] || target="$PWD"
+exec @REPOMANCER_BIN@ --action=log "$target"

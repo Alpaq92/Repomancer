@@ -700,6 +700,51 @@ TEST_CASE("git integration: literal pathspecs defuse magic-named files",
 #endif
 }
 
+TEST_CASE("git integration: a streaming fetch drives the chunk sink",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+
+    // A bare remote a commit ahead, so the fetch has objects to report.
+    const auto bare = repo.path().parent_path() /
+                      (repo.path().filename().string() + "-sremote.git");
+    raw_git(repo.path().parent_path(),
+            {"init", "--bare", "--quiet", bare.filename().string()});
+    raw_git(repo.path(), {"remote", "add", "origin", bare.string()});
+    raw_git(repo.path(), {"push", "--quiet", "--set-upstream", "origin", "HEAD:main"});
+    // Advance the remote via a throwaway clone.
+    const auto work = repo.path().parent_path() /
+                      (repo.path().filename().string() + "-sremote-work");
+    raw_git(repo.path().parent_path(),
+            {"clone", "--quiet", "--branch", "main", bare.string(), work.string()});
+    raw_git(work, {"config", "user.email", "w@t"});
+    raw_git(work, {"config", "user.name", "w"});
+    std::ofstream(work / "streamed.txt") << "hello from the remote\n";
+    raw_git(work, {"add", "streamed.txt"});
+    raw_git(work, {"commit", "--quiet", "-m", "remote advance"});
+    raw_git(work, {"push", "--quiet", "origin", "HEAD:main"});
+
+    std::string streamed;
+    const auto fetched = driver.fetch(
+        repo.path(),
+        [&](std::string_view chunk, bool /*is_stderr*/) {
+            streamed.append(chunk);
+        },
+        nullptr);
+    if (!fetched.ok()) {
+        UNSCOPED_INFO("fetch error: " << fetched.error().stderr_excerpt);
+    }
+    REQUIRE(fetched.ok());
+    // git --progress writes object-counting lines to stderr; the sink saw them.
+    CHECK(!streamed.empty());
+
+    std::filesystem::remove_all(bare);
+    std::filesystem::remove_all(work);
+}
+
 TEST_CASE("git integration: option-looking user strings stay data",
           "[integration]") {
     if (!FixtureRepo::git_available()) {
@@ -889,4 +934,228 @@ TEST_CASE("git integration: without overrides a filter WOULD run (guard is real)
     std::error_code ec;
     CHECK(std::filesystem::exists(flt, ec));
 #endif
+}
+
+TEST_CASE("git integration: commit amend and sign-off", "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    using Options = repomancer::vcs::git::CommitOptions;
+
+    // head_message reads HEAD's %B; the fixture's tip has a known subject.
+    const auto head = driver.head_message(repo.path());
+    REQUIRE(head.ok());
+    CHECK(!head.value().empty());
+
+    const auto before = driver.log(repo.path(), {});
+    REQUIRE(before.ok());
+    const std::string before_tip = before.value().front().hash;
+
+    // Amend with a sign-off: HEAD is replaced (count unchanged), the subject
+    // is the new one, and a Signed-off-by trailer is present.
+    const auto amended = driver.commit(repo.path(), "reworded subject\n\nbody",
+                                       Options{.amend = true, .signoff = true});
+    if (!amended.ok()) {
+        UNSCOPED_INFO("amend error: " << amended.error().stderr_excerpt);
+    }
+    REQUIRE(amended.ok());
+    const auto after = driver.log(repo.path(), {});
+    REQUIRE(after.ok());
+    CHECK(after.value().size() == before.value().size()); // replaced, not added
+    CHECK(after.value().front().hash != before_tip);      // new commit object
+    CHECK(after.value().front().subject == "reworded subject");
+    CHECK(after.value().front().body.find("Signed-off-by:") != std::string::npos);
+}
+
+TEST_CASE("git integration: read-only refuses an amend", "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    repomancer::vcs::git::GitConfig config;
+    config.trust = repomancer::vcs::git::RepoTrust::ReadOnly;
+    GitDriver driver(config);
+    const auto r = driver.commit(repo.path(), "no", {/*amend=*/true, false, false});
+    CHECK(!r.ok());
+    CHECK(r.error().kind == VcsError::Kind::UntrustedRepo);
+}
+
+TEST_CASE("git integration: a clean merge fast-forwards or makes a merge commit",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    // Start from a clean tree on main.
+    raw_git(repo.path(), {"stash", "push", "--include-untracked", "-m", "park"});
+    raw_git(repo.path(), {"switch", "-c", "topic", "main"});
+    std::ofstream(repo.path() / "topic.txt") << "topic work\n";
+    raw_git(repo.path(), {"add", "topic.txt"});
+    raw_git(repo.path(), {"commit", "--quiet", "-m", "topic commit"});
+    raw_git(repo.path(), {"switch", "main"});
+
+    const auto before = driver.log(repo.path(), {});
+    REQUIRE(before.ok());
+    const auto merged = driver.merge(repo.path(), "topic", /*no_ff=*/true);
+    if (!merged.ok()) {
+        UNSCOPED_INFO("merge error: " << merged.error().stderr_excerpt);
+    }
+    REQUIRE(merged.ok());
+    auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(!status.value().merging); // clean merge auto-committed
+    const auto after = driver.log(repo.path(), {});
+    REQUIRE(after.ok());
+    // --no-ff adds a merge commit on top of topic's commit.
+    CHECK(after.value().size() > before.value().size());
+}
+
+TEST_CASE("git integration: a conflicting merge is resolved and committed",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    raw_git(repo.path(), {"stash", "push", "--include-untracked", "-m", "park"});
+
+    // Two branches edit the same line of the same file → conflict.
+    std::ofstream(repo.path() / "conf.txt") << "base\n";
+    raw_git(repo.path(), {"add", "conf.txt"});
+    raw_git(repo.path(), {"commit", "--quiet", "-m", "conf base"});
+    raw_git(repo.path(), {"switch", "-c", "sideA", "main"});
+    std::ofstream(repo.path() / "conf.txt") << "from A\n";
+    raw_git(repo.path(), {"commit", "--quiet", "-am", "A edit"});
+    raw_git(repo.path(), {"switch", "main"});
+    std::ofstream(repo.path() / "conf.txt") << "from main\n";
+    raw_git(repo.path(), {"commit", "--quiet", "-am", "main edit"});
+
+    // The merge conflicts: non-zero, merge in progress, unmerged entry.
+    const auto merged = driver.merge(repo.path(), "sideA", /*no_ff=*/false);
+    CHECK(!merged.ok());
+    auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(status.value().merging);
+    const auto* conf = find_entry(status.value(), "conf.txt");
+    REQUIRE(conf != nullptr);
+    CHECK(conf->kind == EntryKind::Unmerged);
+
+    // Resolve by taking THEIR side ("from A"), which differs from HEAD, so
+    // the resolution shows as a staged change; the conflict is gone.
+    REQUIRE(driver.checkout_conflict(repo.path(), "conf.txt", /*ours=*/false).ok());
+    status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(status.value().merging);          // still merging until commit
+    const auto* resolved = find_entry(status.value(), "conf.txt");
+    REQUIRE(resolved != nullptr);
+    CHECK(resolved->kind == EntryKind::Ordinary);
+    CHECK(resolved->x != '.');               // staged
+    REQUIRE(driver.commit(repo.path(), "merge sideA (took theirs)").ok());
+    status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(!status.value().merging);         // merge finished
+    CHECK(status.value().entries.empty());
+}
+
+TEST_CASE("git integration: an external merge tool resolves a conflict",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+#ifdef _WIN32
+    // The fake tool below is a POSIX-shell cmd; git mergetool runs it via sh.
+    SKIP("the fake merge-tool cmd is POSIX-shell-specific");
+#else
+    FixtureRepo repo;
+    GitDriver driver;
+    raw_git(repo.path(), {"stash", "push", "--include-untracked", "-m", "park"});
+
+    // A conflict on one line of one file.
+    std::ofstream(repo.path() / "conf.txt") << "base\n";
+    raw_git(repo.path(), {"add", "conf.txt"});
+    raw_git(repo.path(), {"commit", "--quiet", "-m", "conf base"});
+    raw_git(repo.path(), {"switch", "-c", "sideA", "main"});
+    std::ofstream(repo.path() / "conf.txt") << "from A\n";
+    raw_git(repo.path(), {"commit", "--quiet", "-am", "A edit"});
+    raw_git(repo.path(), {"switch", "main"});
+    std::ofstream(repo.path() / "conf.txt") << "from main\n";
+    raw_git(repo.path(), {"commit", "--quiet", "-am", "main edit"});
+    REQUIRE(!driver.merge(repo.path(), "sideA", /*no_ff=*/false).ok());
+
+    // A non-interactive "tool": take THEIR side, trusting its exit code.
+    raw_git(repo.path(),
+            {"config", "mergetool.faketool.cmd", "cp \"$REMOTE\" \"$MERGED\""});
+    raw_git(repo.path(), {"config", "mergetool.faketool.trustExitCode", "true"});
+
+    const auto resolved = driver.resolve_with_tool(repo.path(), "conf.txt", "faketool");
+    if (!resolved.ok()) {
+        UNSCOPED_INFO("mergetool error: " << resolved.error().stderr_excerpt);
+    }
+    REQUIRE(resolved.ok());
+    auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    const auto* conf = find_entry(status.value(), "conf.txt");
+    REQUIRE(conf != nullptr);
+    CHECK(conf->kind == repomancer::vcs::EntryKind::Ordinary); // no longer Unmerged
+    CHECK(conf->x != '.');                                     // staged as resolved
+#endif
+}
+
+TEST_CASE("git integration: read-only refuses the merge tool", "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    repomancer::vcs::git::GitConfig config;
+    config.trust = repomancer::vcs::git::RepoTrust::ReadOnly;
+    GitDriver driver(config);
+    const auto r = driver.resolve_with_tool(repo.path(), "a.txt", "meld");
+    CHECK(!r.ok());
+    CHECK(r.error().kind == VcsError::Kind::UntrustedRepo);
+}
+
+TEST_CASE("git integration: aborting a conflicting merge restores the tree",
+          "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    raw_git(repo.path(), {"stash", "push", "--include-untracked", "-m", "park"});
+    std::ofstream(repo.path() / "c.txt") << "base\n";
+    raw_git(repo.path(), {"add", "c.txt"});
+    raw_git(repo.path(), {"commit", "--quiet", "-m", "c base"});
+    raw_git(repo.path(), {"switch", "-c", "other", "main"});
+    std::ofstream(repo.path() / "c.txt") << "other\n";
+    raw_git(repo.path(), {"commit", "--quiet", "-am", "other edit"});
+    raw_git(repo.path(), {"switch", "main"});
+    std::ofstream(repo.path() / "c.txt") << "mine\n";
+    raw_git(repo.path(), {"commit", "--quiet", "-am", "my edit"});
+
+    REQUIRE(!driver.merge(repo.path(), "other", /*no_ff=*/false).ok());
+    REQUIRE(driver.status(repo.path()).value().merging);
+    REQUIRE(driver.merge_abort(repo.path()).ok());
+    const auto status = driver.status(repo.path());
+    REQUIRE(status.ok());
+    CHECK(!status.value().merging);
+    CHECK(status.value().entries.empty()); // clean again
+}
+
+TEST_CASE("git integration: read-only refuses merge operations", "[integration]") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    repomancer::vcs::git::GitConfig config;
+    config.trust = repomancer::vcs::git::RepoTrust::ReadOnly;
+    GitDriver driver(config);
+    const auto refused = [](const auto& r) {
+        return !r.ok() && r.error().kind == VcsError::Kind::UntrustedRepo;
+    };
+    CHECK(refused(driver.merge(repo.path(), "feature", false)));
+    CHECK(refused(driver.merge_abort(repo.path())));
+    CHECK(refused(driver.checkout_conflict(repo.path(), "a.txt", true)));
 }

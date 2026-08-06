@@ -17,6 +17,15 @@
 namespace repomancer::gui::icons {
 
 // lucide "bookmark"
+// lucide "book"
+inline constexpr const char* kBook = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" />
+</svg>)svg";
+
+// lucide "bookmark"
 inline constexpr const char* kBookmark = R"svg(<svg
   xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
   fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
@@ -139,17 +148,6 @@ inline constexpr const char* kSquareArrowRightEnter = R"svg(<svg
   <path d="M3 8V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3" />
 </svg>)svg";
 
-// lucide "hash"
-inline constexpr const char* kHash = R"svg(<svg
-  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
-  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-  stroke-linejoin="round">
-  <line x1="4" x2="20" y1="9" y2="9" />
-  <line x1="4" x2="20" y1="15" y2="15" />
-  <line x1="10" x2="8" y1="3" y2="21" />
-  <line x1="16" x2="14" y1="3" y2="21" />
-</svg>)svg";
-
 // lucide "file-type-corner"
 inline constexpr const char* kFileTypeCorner = R"svg(<svg
   xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
@@ -160,15 +158,6 @@ inline constexpr const char* kFileTypeCorner = R"svg(<svg
   <path d="M3 16v-1.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5V16" />
   <path d="M6 22h2" />
   <path d="M7 14v8" />
-</svg>)svg";
-
-// lucide "tag"
-inline constexpr const char* kTag = R"svg(<svg
-  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
-  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-  stroke-linejoin="round">
-  <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
-  <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
 </svg>)svg";
 
 // lucide "arrow-down-to-line"
@@ -223,6 +212,47 @@ inline constexpr const char* kHeartHandshake = R"svg(<svg
   fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
   stroke-linejoin="round">
   <path d="M19.414 14.414C21 12.828 22 11.5 22 9.5a5.5 5.5 0 0 0-9.591-3.676.6.6 0 0 1-.818.001A5.5 5.5 0 0 0 2 9.5c0 2.3 1.5 4 3 5.5l5.535 5.362a2 2 0 0 0 2.879.052 2.12 2.12 0 0 0-.004-3 2.124 2.124 0 1 0 3-3 2.124 2.124 0 0 0 3.004 0 2 2 0 0 0 0-2.828l-1.881-1.882a2.41 2.41 0 0 0-3.409 0l-1.71 1.71a2 2 0 0 1-2.828 0 2 2 0 0 1 0-2.828l2.823-2.762" />
+</svg>)svg";
+
+// lucide "file-digit"
+inline constexpr const char* kFileDigit = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="M4 12V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2" />
+  <path d="M14 2v5a1 1 0 0 0 1 1h5" />
+  <path d="M10 16h2v6" />
+  <path d="M10 22h4" />
+  <rect x="2" y="16" width="4" height="6" rx="2" />
+</svg>)svg";
+
+// lucide "arrow-up-from-line"
+inline constexpr const char* kArrowUpFromLine = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <path d="m18 9-6-6-6 6" />
+  <path d="M12 3v14" />
+  <path d="M5 21h14" />
+</svg>)svg";
+
+// lucide "ban"
+inline constexpr const char* kBan = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10" />
+  <path d="M4.929 4.929 19.07 19.071" />
+</svg>)svg";
+
+// lucide "git-merge"
+inline constexpr const char* kGitMerge = R"svg(<svg
+  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+  fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+  stroke-linejoin="round">
+  <circle cx="18" cy="18" r="3" />
+  <circle cx="6" cy="6" r="3" />
+  <path d="M6 21V9a9 9 0 0 0 9 9" />
 </svg>)svg";
 
 // lucide "git-branch-plus"

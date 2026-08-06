@@ -9,17 +9,30 @@
 #include <wx/dialog.h>
 
 class wxStyledTextCtrl;
+class wxCheckBox;
 
 namespace repomancer::gui {
 
 class CommitDialog : public wxDialog {
 public:
-    explicit CommitDialog(wxWindow* parent, int staged_count);
+    // `seed` (optional) pre-fills the editor — used for a merge commit,
+    // where it also switches the heading from the staged-file count.
+    // `amend_message` (optional), when non-empty, enables an "Amend last
+    // commit" checkbox that swaps the editor to HEAD's message.
+    explicit CommitDialog(wxWindow* parent, int staged_count,
+                          const wxString& seed = {},
+                          const wxString& amend_message = {});
 
     [[nodiscard]] wxString Message() const;
+    [[nodiscard]] bool Amend() const;
+    [[nodiscard]] bool SignOff() const;
+    [[nodiscard]] bool GpgSign() const;
 
 private:
     wxStyledTextCtrl* editor_ = nullptr;
+    wxCheckBox* amend_ = nullptr;
+    wxCheckBox* signoff_ = nullptr;
+    wxCheckBox* gpg_ = nullptr;
 };
 
 } // namespace repomancer::gui

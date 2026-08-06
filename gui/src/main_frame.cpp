@@ -10,6 +10,7 @@
 #include "icons.h"
 #include "pane_header.h"
 #include "preferences_dialog.h"
+#include "remote_progress_dialog.h"
 #include "text_sanitize.h"
 #include "theme.h"
 #include "title_bar.h"
@@ -60,6 +61,8 @@ enum {
     ID_Stash,
     ID_StashPop,
     ID_TrustRepo,
+    ID_CommitMerge,
+    ID_AbortMerge,
 };
 } // namespace
 
@@ -92,15 +95,11 @@ MainFrame::MainFrame() {
 #endif
     // Bitmaps go on before Append: wxGTK ignores a bitmap set afterwards.
     auto* file_menu = new wxMenu;
+    // Order: Open, Open Recent, Refresh — a separator — Preferences, Quit.
     auto* open_item = new wxMenuItem(file_menu, wxID_OPEN, _("&Open Repository…\tCtrl-O"),
                                      _("Open a local git repository"));
     open_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kFolderGit));
     file_menu->Append(open_item);
-    auto* prefs_item = new wxMenuItem(file_menu, wxID_PREFERENCES,
-                                      _("&Preferences…\tCtrl-,"),
-                                      _("Configure the VCS tools Repomancer drives"));
-    prefs_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kSettings));
-    file_menu->Append(prefs_item);
     recent_menu_ = new wxMenu;
     auto* recent_item = new wxMenuItem(file_menu, wxID_ANY, _("Open &Recent"),
                                        wxEmptyString, wxITEM_NORMAL, recent_menu_);
@@ -114,6 +113,11 @@ MainFrame::MainFrame() {
         repomancer::gui::icons::menu_icon(repomancer::gui::icons::kRotateCw));
     file_menu->Append(refresh_item);
     file_menu->AppendSeparator();
+    auto* prefs_item = new wxMenuItem(file_menu, wxID_PREFERENCES,
+                                      _("&Preferences…\tCtrl-,"),
+                                      _("Configure the VCS tools Repomancer drives"));
+    prefs_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kSettings));
+    file_menu->Append(prefs_item);
     auto* quit_item = new wxMenuItem(file_menu, wxID_EXIT);
     quit_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kExit));
     file_menu->Append(quit_item);
@@ -139,6 +143,19 @@ MainFrame::MainFrame() {
               repomancer::gui::icons::kLayers2);
     repo_item(ID_StashPop, _("Pop S&tash"), _("Re-apply and drop the newest stash"),
               repomancer::gui::icons::kUndo2);
+    repo_menu->AppendSeparator();
+    auto* commit_merge_item = new wxMenuItem(
+        repo_menu, ID_CommitMerge, _("&Commit Merge…"),
+        _("Finish the in-progress merge with a commit"));
+    commit_merge_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kArrowUpFromLine));
+    merge_commit_item_ = repo_menu->Append(commit_merge_item);
+    auto* abort_merge_item = new wxMenuItem(
+        repo_menu, ID_AbortMerge, _("&Abort Merge"),
+        _("Discard the in-progress merge and restore the tree"));
+    abort_merge_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kBan));
+    merge_abort_item_ = repo_menu->Append(abort_merge_item);
     repo_menu->AppendSeparator();
     auto* trust_item = new wxMenuItem(
         repo_menu, ID_TrustRepo, _("Trust This Repositor&y"),
@@ -167,7 +184,7 @@ MainFrame::MainFrame() {
 
     auto* help_menu = new wxMenu;
     auto* about_item = new wxMenuItem(help_menu, wxID_ABOUT);
-    about_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kBookmark));
+    about_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kBook));
     help_menu->Append(about_item);
 
 #ifdef REPOMANCER_HAVE_WXBF
@@ -556,6 +573,8 @@ MainFrame::MainFrame() {
     Bind(wxEVT_MENU, repo_op(&MainFrame::PushCurrentBranch), ID_Push);
     Bind(wxEVT_MENU, repo_op(&MainFrame::StashChanges), ID_Stash);
     Bind(wxEVT_MENU, repo_op(&MainFrame::PopStash), ID_StashPop);
+    Bind(wxEVT_MENU, repo_op(&MainFrame::CommitMerge), ID_CommitMerge);
+    Bind(wxEVT_MENU, repo_op(&MainFrame::AbortMerge), ID_AbortMerge);
     Bind(
         wxEVT_MENU,
         [this](wxCommandEvent&) {
@@ -634,7 +653,20 @@ MainFrame::MainFrame() {
                 entry.kind == repomancer::vcs::EntryKind::Ordinary && entry.x != '.';
             const bool stageable = entry.kind == repomancer::vcs::EntryKind::Untracked ||
                                    entry.y != '.';
-            if (stageable) {
+            if (entry.kind == repomancer::vcs::EntryKind::Unmerged) {
+                // Conflict resolution: take one whole side (each stages the
+                // result), or mark an externally-edited file resolved.
+                add(_("Use &Ours (current branch)"), nullptr,
+                    [this, wt_path] { ResolveConflict(wt_path, /*ours=*/true); });
+                add(_("Use &Theirs (merged branch)"), nullptr,
+                    [this, wt_path] { ResolveConflict(wt_path, /*ours=*/false); });
+                add(_("Resolve in &External Tool…"),
+                    repomancer::gui::icons::kGitMerge,
+                    [this, wt_path] { ResolveWithTool(wt_path); });
+                add(_("&Mark Resolved"), nullptr,
+                    [this, wt_path] { StageWorktreeFile(wt_path, true); });
+                menu.AppendSeparator();
+            } else if (stageable) {
                 add(_("&Stage"), nullptr,
                     [this, wt_path] { StageWorktreeFile(wt_path, true); });
             }
@@ -746,9 +778,14 @@ void MainFrame::ShowWorktree() {
             worktree_mode_ = true;
             selected_commit_.clear();
             worktree_entries_ = snapshot.entries;
+            UpdateMergeState(snapshot.merging);
 
             wxString text;
             text << _("Working tree") << "\n";
+            if (merging_) {
+                text << _("⚠ Merge in progress — resolve conflicts, then "
+                          "Repository ▸ Commit Merge") << "\n";
+            }
             text << _("Branch:  ")
                  << repomancer::gui::sanitized_utf8(snapshot.branch.head) << "\n";
             if (!snapshot.branch.upstream.empty()) {
@@ -824,17 +861,26 @@ void MainFrame::CommitStaged() {
         worktree_entries_.begin(), worktree_entries_.end(), [](const auto& e) {
             return e.kind == repomancer::vcs::EntryKind::Ordinary && e.x != '.';
         }));
-    repomancer::gui::CommitDialog dialog(this, staged);
+    // HEAD's message seeds an amend; a quick read on the UI thread, like the
+    // other pre-dialog git calls.
+    wxString amend_message;
+    if (auto head = GitDriver(git_config_).head_message(repo_path_);
+        head.ok() && !head.value().empty()) {
+        amend_message = wxString::FromUTF8(head.value());
+    }
+    repomancer::gui::CommitDialog dialog(this, staged, wxString(), amend_message);
     if (dialog.ShowModal() != wxID_OK) {
         return;
     }
     const std::string message(dialog.Message().utf8_str());
+    const repomancer::vcs::git::CommitOptions options{
+        dialog.Amend(), dialog.SignOff(), dialog.GpgSign()};
     SetStatusText(_("Committing…"));
     RunGitOp(
         _("Commit failed: "),
-        [message](const std::filesystem::path& repo,
-                  const repomancer::vcs::git::GitConfig& config) {
-            return GitDriver(config).commit(repo, message);
+        [message, options](const std::filesystem::path& repo,
+                           const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).commit(repo, message, options);
         },
         [this](std::string) { ReloadRepository(); /* the history changed */ });
 }
@@ -851,9 +897,31 @@ void MainFrame::OnBranchMenu(const wxString& branch) {
     auto* new_branch_item = new wxMenuItem(&menu, wxID_ANY, _("&New Branch Here…"));
     new_branch_item->SetBitmap(menu_icon(repomancer::gui::icons::kGitBranchPlus));
     menu.Append(new_branch_item);
+    auto* merge_item = new wxMenuItem(
+        &menu, wxID_ANY,
+        wxString::Format(_("&Merge \"%s\" into \"%s\"…"), branch,
+                         wxString::FromUTF8(current_branch_)));
+    merge_item->SetBitmap(menu_icon(repomancer::gui::icons::kGitMerge));
+    menu.Append(merge_item);
+    // Merging a branch into itself is a no-op; only offer it for others.
+    merge_item->Enable(name != current_branch_);
     menu.Bind(
         wxEVT_MENU, [this, name](wxCommandEvent&) { SwitchBranch(name); },
         switch_item->GetId());
+    menu.Bind(
+        wxEVT_MENU,
+        [this, name](wxCommandEvent&) {
+            wxMessageDialog confirm(
+                this,
+                wxString::Format(_("Merge \"%s\" into \"%s\"?"),
+                                 wxString::FromUTF8(name),
+                                 wxString::FromUTF8(current_branch_)),
+                _("Merge Branch"), wxYES_NO | wxYES_DEFAULT | wxICON_QUESTION);
+            if (confirm.ShowModal() == wxID_YES) {
+                MergeBranch(name);
+            }
+        },
+        merge_item->GetId());
     menu.Bind(
         wxEVT_MENU,
         [this, name](wxCommandEvent&) {
@@ -899,46 +967,62 @@ void MainFrame::CreateBranch(const std::string& branch) {
         [this](std::string) { ReloadRepository(); });
 }
 
-void MainFrame::FetchRemotes() {
-    if (!RepoWritable()) {
+void MainFrame::RunRemoteOp(
+    const wxString& title,
+    std::function<repomancer::vcs::VcsResult<std::string>(
+        repomancer::vcs::git::GitDriver&, const std::filesystem::path&,
+        const repomancer::proc::ChunkSink&, const std::atomic<bool>*)>
+        op) {
+    if (!RepoWritable() || busy_.load() || op_running_.load()) {
+        wxBell();
         return;
     }
-    SetStatusText(_("Fetching from every remote…"));
-    RunGitOp(
-        _("Fetch failed: "),
-        [](const std::filesystem::path& repo,
-           const repomancer::vcs::git::GitConfig& config) {
-            return GitDriver(config).fetch(repo);
-        },
-        [this](std::string) { ReloadRepository(); });
+    // The dialog owns the worker thread and the live git output; it blocks
+    // here until the transfer finishes or is cancelled.
+    repomancer::gui::RemoteProgressDialog dialog(
+        this, title,
+        [this, op = std::move(op)](const repomancer::proc::ChunkSink& sink,
+                                   const std::atomic<bool>* cancel) {
+            repomancer::vcs::git::GitDriver driver(git_config_);
+            return op(driver, repo_path_, sink, cancel);
+        });
+    const auto result = dialog.Run();
+    if (result.ok()) {
+        SetStatusText(title + _(" — done"));
+        ReloadRepository();
+    } else if (result.error().kind == repomancer::vcs::VcsError::Kind::Cancelled) {
+        SetStatusText(title + _(" — cancelled"));
+    } else {
+        SetStatusText(title + ": " + repomancer::gui::error_text(result.error()));
+    }
+}
+
+void MainFrame::FetchRemotes() {
+    RunRemoteOp(_("Fetching from every remote"),
+                [](repomancer::vcs::git::GitDriver& driver,
+                   const std::filesystem::path& repo,
+                   const repomancer::proc::ChunkSink& sink,
+                   const std::atomic<bool>* cancel) {
+                    return driver.fetch(repo, sink, cancel);
+                });
 }
 
 void MainFrame::PullCurrentBranch() {
-    if (!RepoWritable()) {
-        return;
-    }
-    SetStatusText(_("Pulling…"));
-    RunGitOp(
-        _("Pull failed: "),
-        [](const std::filesystem::path& repo,
-           const repomancer::vcs::git::GitConfig& config) {
-            return GitDriver(config).pull(repo);
-        },
-        [this](std::string) { ReloadRepository(); });
+    RunRemoteOp(_("Pulling"), [](repomancer::vcs::git::GitDriver& driver,
+                                 const std::filesystem::path& repo,
+                                 const repomancer::proc::ChunkSink& sink,
+                                 const std::atomic<bool>* cancel) {
+        return driver.pull(repo, sink, cancel);
+    });
 }
 
 void MainFrame::PushCurrentBranch() {
-    if (!RepoWritable()) {
-        return;
-    }
-    SetStatusText(_("Pushing…"));
-    RunGitOp(
-        _("Push failed: "),
-        [](const std::filesystem::path& repo,
-           const repomancer::vcs::git::GitConfig& config) {
-            return GitDriver(config).push(repo);
-        },
-        [this](std::string) { ReloadRepository(); /* ahead/behind moved */ });
+    RunRemoteOp(_("Pushing"), [](repomancer::vcs::git::GitDriver& driver,
+                                 const std::filesystem::path& repo,
+                                 const repomancer::proc::ChunkSink& sink,
+                                 const std::atomic<bool>* cancel) {
+        return driver.push(repo, sink, cancel);
+    });
 }
 
 void MainFrame::StashChanges() {
@@ -996,12 +1080,12 @@ void MainFrame::OnLogMenu(int row) {
             [action = std::move(action)](wxCommandEvent&) { action(); },
             item->GetId());
     };
-    add(_("&Copy Hash"), repomancer::gui::icons::kHash,
+    add(_("&Copy Hash"), repomancer::gui::icons::kFileDigit,
         [hash] { CopyToClipboard(wxString::FromUTF8(hash)); });
     add(_("Copy &Subject"), repomancer::gui::icons::kFileTypeCorner,
         [subject] { CopyToClipboard(subject); });
     menu.AppendSeparator();
-    add(_("&Tag Here…"), repomancer::gui::icons::kTag, [this, hash] {
+    add(_("&Tag Here…"), repomancer::gui::icons::kBookmark, [this, hash] {
         if (!RepoWritable()) {
             return;
         }
@@ -1166,6 +1250,107 @@ void MainFrame::DiscardFile(const std::string& path) {
         [this](std::string) { ShowWorktree(); });
 }
 
+void MainFrame::UpdateMergeState(bool merging) {
+    merging_ = merging;
+    if (merge_commit_item_ != nullptr) {
+        merge_commit_item_->Enable(merging);
+    }
+    if (merge_abort_item_ != nullptr) {
+        merge_abort_item_->Enable(merging);
+    }
+}
+
+void MainFrame::MergeBranch(const std::string& branch) {
+    if (!RepoWritable()) {
+        return;
+    }
+    SetStatusText(wxString::Format(_("Merging %s…"), wxString::FromUTF8(branch)));
+    RunGitOp(
+        _("Merge failed: "),
+        [branch](const std::filesystem::path& repo,
+                 const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).merge(repo, branch, /*no_ff=*/false);
+        },
+        [this](std::string) { ReloadRepository(); },
+        // A conflict is not an error to swallow: git exits non-zero, but the
+        // merge is live. Drop into the working-tree view so the user can
+        // resolve, and say so plainly.
+        [this](const repomancer::vcs::VcsError&) {
+            SetStatusText(_("Merge stopped with conflicts — resolve them in the "
+                            "working tree, then Repository ▸ Commit Merge"));
+            ShowWorktree();
+        });
+}
+
+void MainFrame::AbortMerge() {
+    if (!RepoWritable()) {
+        return;
+    }
+    SetStatusText(_("Aborting the merge…"));
+    RunGitOp(
+        _("Merge abort failed: "),
+        [](const std::filesystem::path& repo,
+           const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).merge_abort(repo);
+        },
+        [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::CommitMerge() {
+    if (!RepoWritable()) {
+        return;
+    }
+    repomancer::gui::CommitDialog dialog(
+        this, /*staged=*/0,
+        wxString::Format(_("Merge into %s"),
+                         wxString::FromUTF8(current_branch_)));
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::string message(dialog.Message().utf8_str());
+    const repomancer::vcs::git::CommitOptions options{
+        /*amend=*/false, dialog.SignOff(), dialog.GpgSign()};
+    SetStatusText(_("Committing the merge…"));
+    RunGitOp(
+        _("Merge commit failed: "),
+        [message, options](const std::filesystem::path& repo,
+                           const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).commit(repo, message, options);
+        },
+        [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::ResolveConflict(const std::string& path, bool ours) {
+    if (!RepoWritable()) {
+        return;
+    }
+    SetStatusText(wxString::Format(_("Resolving %s…"), wxString::FromUTF8(path)));
+    RunGitOp(
+        _("Resolve failed: "),
+        [path, ours](const std::filesystem::path& repo,
+                     const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).checkout_conflict(repo, path, ours);
+        },
+        [this](std::string) { ShowWorktree(); });
+}
+
+void MainFrame::ResolveWithTool(const std::string& path) {
+    if (!RepoWritable()) {
+        return;
+    }
+    const std::string tool = repomancer::load_settings().merge_tool;
+    SetStatusText(wxString::Format(
+        _("Opening the merge tool for %s — resolve and save, then close it…"),
+        wxString::FromUTF8(path)));
+    RunGitOp(
+        _("Merge tool failed: "),
+        [path, tool](const std::filesystem::path& repo,
+                     const repomancer::vcs::git::GitConfig& config) {
+            return GitDriver(config).resolve_with_tool(repo, path, tool);
+        },
+        [this](std::string) { ShowWorktree(); });
+}
+
 void MainFrame::AppendFileRow(const wxString& change, const std::string& path,
                               const std::string& old_path) {
     wxString shown = repomancer::gui::sanitized_utf8(path);
@@ -1266,11 +1451,20 @@ void MainFrame::PopulateRepoDetails(
     // control characters before display, as everywhere else in the UI.
     const auto& clean = repomancer::gui::sanitized_utf8;
 
+    // Decide merge state first: the badge below reads merging_.
+    UpdateMergeState(status.ok() && status.value().merging);
+
     std::vector<Row> rows;
     if (repo_read_only_) {
         // The one indicator that survives every status-bar update.
         Row badge;
         badge.text = _("Read-only — untrusted");
+        badge.heading = true;
+        rows.push_back(std::move(badge));
+    }
+    if (merging_) {
+        Row badge;
+        badge.text = _("Merging — resolve conflicts");
         badge.heading = true;
         rows.push_back(std::move(badge));
     }
@@ -1618,7 +1812,9 @@ MainFrame::~MainFrame() {
     aui_.UnInit();
 }
 
-void MainFrame::OnPreferences(wxCommandEvent&) {
+void MainFrame::OnPreferences(wxCommandEvent&) { OpenPreferences(); }
+
+void MainFrame::OpenPreferences() {
     const auto before = repomancer::load_settings();
     repomancer::gui::PreferencesDialog dialog(this, before);
     if (dialog.ShowModal() != wxID_OK) {
@@ -1762,6 +1958,39 @@ void MainFrame::OnOpenRepository(wxCommandEvent&) {
     LoadRepository(dialog.GetPath());
 }
 
+MainFrame::StartupAction
+MainFrame::StartupActionFromString(const std::string& name) {
+    if (name == "commit") {
+        return StartupAction::Commit;
+    }
+    if (name == "sync") {
+        return StartupAction::Sync;
+    }
+    if (name == "settings") {
+        return StartupAction::Settings;
+    }
+    return StartupAction::None; // "log" and anything else: the default view
+}
+
+void MainFrame::RunStartupAction() {
+    // One-shot: a later reload must not re-fire the launch action.
+    const StartupAction action = startup_action_;
+    startup_action_ = StartupAction::None;
+    switch (action) {
+    case StartupAction::Commit:
+        ShowWorktree();
+        break;
+    case StartupAction::Sync:
+        FetchRemotes();
+        break;
+    case StartupAction::Settings:
+        OpenPreferences();
+        break;
+    case StartupAction::None:
+        break;
+    }
+}
+
 void MainFrame::OpenRepository(const wxString& path) { LoadRepository(path); }
 
 void MainFrame::ComputeReadOnlyOverrides(const std::filesystem::path& repo) {
@@ -1900,6 +2129,7 @@ void MainFrame::LoadRepository(const wxString& path) {
                     recent_repos_ = remembered.recent_repos;
                     RebuildRecentMenu();
                 }
+                RunStartupAction();
             });
         });
     });

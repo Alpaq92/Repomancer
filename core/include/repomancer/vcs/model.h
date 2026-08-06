@@ -99,6 +99,7 @@ struct BranchInfo {
 struct StatusSnapshot {
     BranchInfo branch;
     std::vector<StatusEntry> entries;
+    bool merging = false; // a merge is in progress (MERGE_HEAD exists)
 };
 
 } // namespace repomancer::vcs

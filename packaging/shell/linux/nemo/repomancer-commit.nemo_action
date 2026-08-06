@@ -1,0 +1,8 @@
+[Nemo Action]
+Name=Repomancer: Commit…
+Comment=Open the working tree to stage and commit
+Exec=@REPOMANCER_BIN@ --action=commit %F
+Icon-Name=repomancer-commit
+Selection=any
+Extensions=dir;
+Dependencies=@REPOMANCER_BIN@

@@ -26,6 +26,7 @@ endif()
 add_executable(repomancer WIN32 MACOSX_BUNDLE
   src/main.cpp
   src/main_frame.cpp
+  src/remote_progress_dialog.cpp
   src/title_bar.cpp
   src/gtk_header_bar.cpp
   src/log_model.cpp
@@ -63,3 +64,17 @@ endif()
 
 repomancer_warnings(repomancer)
 repomancer_harden(repomancer)
+
+# Desktop integration assets (Linux): the application entry + icon that the
+# Tier-0 shell menus (packaging/shell) reference by name. The .desktop is
+# configured with the installed binary path.
+if(UNIX AND NOT APPLE)
+  set(REPOMANCER_BIN "${CMAKE_INSTALL_PREFIX}/bin/repomancer")
+  configure_file(
+    "${CMAKE_SOURCE_DIR}/packaging/shell/linux/repomancer.desktop"
+    "${CMAKE_CURRENT_BINARY_DIR}/repomancer.desktop" @ONLY)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/repomancer.desktop"
+          DESTINATION share/applications)
+  install(FILES "${CMAKE_SOURCE_DIR}/packaging/icons/repomancer.svg"
+          DESTINATION share/icons/hicolor/scalable/apps)
+endif()

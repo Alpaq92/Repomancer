@@ -52,6 +52,21 @@ PreferencesDialog::PreferencesDialog(wxWindow* parent, const repomancer::Setting
     test_result_ = new wxStaticText(this, wxID_ANY, wxEmptyString);
     root->Add(test_result_, 0, wxLEFT | wxRIGHT | wxTOP, 12);
 
+    auto* merge_row = new wxBoxSizer(wxHORIZONTAL);
+    merge_row->Add(new wxStaticText(this, wxID_ANY, _("Merge tool:")), 0,
+                   wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+    merge_tool_ = new wxTextCtrl(this, wxID_ANY,
+                                 wxString::FromUTF8(settings_.merge_tool),
+                                 wxDefaultPosition, wxSize(280, -1));
+    merge_tool_->SetHint(_("empty = git's configured merge.tool"));
+    merge_row->Add(merge_tool_, 1, wxALIGN_CENTER_VERTICAL);
+    root->Add(merge_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 12);
+    root->Add(new wxStaticText(
+                  this, wxID_ANY,
+                  _("A git mergetool name — e.g. meld, kdiff3, vimdiff, or one you "
+                    "configured. Used to resolve conflicts from the working tree.")),
+              0, wxLEFT | wxRIGHT | wxTOP, 12);
+
     heading(_("Interface"));
     integrated_titlebar_ = new wxCheckBox(
         this, wxID_ANY, _("Integrated title bar (takes effect after restart)"));
@@ -96,6 +111,8 @@ repomancer::Settings PreferencesDialog::Result() const {
     repomancer::Settings result = settings_;
     const std::string value(git_binary_->GetValue().Trim(true).Trim(false).utf8_str());
     result.git_binary = value.empty() ? "git" : value;
+    result.merge_tool =
+        std::string(merge_tool_->GetValue().Trim(true).Trim(false).utf8_str());
     result.integrated_titlebar = integrated_titlebar_->GetValue();
     result.topbar_buttons = topbar_buttons_->GetSelection();
     result.topbar_sharp_corners = sharp_corners_->GetValue();

@@ -131,6 +131,9 @@ Settings load_settings(const std::filesystem::path& config_dir) {
             settings.git_binary = value;
         }
     }
+    if (const auto it = json.find("merge_tool"); it != json.end() && it->is_string()) {
+        settings.merge_tool = it->get<std::string>();
+    }
     return settings;
 }
 
@@ -173,6 +176,7 @@ bool save_settings(const Settings& settings, const std::filesystem::path& config
         {"theme", settings.theme},
         {"graph_style", settings.graph_style},
         {"git_binary", settings.git_binary},
+        {"merge_tool", settings.merge_tool},
         {"integrated_titlebar", settings.integrated_titlebar},
         {"topbar_buttons", settings.topbar_buttons},
         {"topbar_sharp_corners", settings.topbar_sharp_corners},
