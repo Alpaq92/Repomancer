@@ -130,15 +130,15 @@ MainFrame::MainFrame() {
         item->SetBitmap(repomancer::gui::icons::menu_icon(icon));
         repo_menu->Append(item);
     };
-    repo_item(ID_Fetch, _("&Fetch\tCtrl-Shift-F"),
-              _("Download new commits from every remote"),
-              repomancer::gui::icons::kArrowDownToLine);
-    repo_item(ID_Pull, _("&Pull\tCtrl-Shift-P"),
-              _("Fast-forward the current branch from its upstream"),
-              repomancer::gui::icons::kArrowDown);
     repo_item(ID_Push, _("Pus&h\tCtrl-P"),
               _("Publish the current branch to its upstream"),
-              repomancer::gui::icons::kArrowUp);
+              repomancer::gui::icons::kArrowUpFromLine);
+    repo_item(ID_Pull, _("&Pull\tCtrl-Shift-P"),
+              _("Fast-forward the current branch from its upstream"),
+              repomancer::gui::icons::kArrowDownToLine);
+    repo_item(ID_Fetch, _("&Fetch\tCtrl-Shift-F"),
+              _("Download new commits from every remote"),
+              repomancer::gui::icons::kArrowDown);
     repo_menu->AppendSeparator();
     repo_item(ID_Stash, _("&Stash Changes…"), _("Set the tracked changes aside"),
               repomancer::gui::icons::kLayers2);
@@ -149,7 +149,7 @@ MainFrame::MainFrame() {
         repo_menu, ID_CommitMerge, _("&Commit Merge…"),
         _("Finish the in-progress merge with a commit"));
     commit_merge_item->SetBitmap(
-        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kArrowUpFromLine));
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kArrowUp));
     merge_commit_item_ = repo_menu->Append(commit_merge_item);
     auto* abort_merge_item = new wxMenuItem(
         repo_menu, ID_AbortMerge, _("&Abort Merge"),
