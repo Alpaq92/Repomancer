@@ -22,7 +22,8 @@ namespace repomancer::gui {
 namespace ssh = repomancer::ssh;
 
 SshSetupDialog::SshSetupDialog(wxWindow* parent, ssh::KeyInfo key,
-                               const std::string& passphrase)
+                               const std::string& passphrase,
+                               const std::string& default_host)
     : wxDialog(parent, wxID_ANY, _("Set Up SSH Key"), wxDefaultPosition,
                wxSize(600, 560), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
       key_(std::move(key)),
@@ -60,7 +61,9 @@ SshSetupDialog::SshSetupDialog(wxWindow* parent, ssh::KeyInfo key,
     auto* host_row = new wxBoxSizer(wxHORIZONTAL);
     host_row->Add(new wxStaticText(this, wxID_ANY, _("&Host:")), 0,
                   wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-    host_ = new wxTextCtrl(this, wxID_ANY, "github.com");
+    host_ = new wxTextCtrl(this, wxID_ANY,
+                       wxString::FromUTF8(default_host.empty() ? "github.com"
+                                                              : default_host));
     host_row->Add(host_, 1);
     root->Add(host_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 12);
 

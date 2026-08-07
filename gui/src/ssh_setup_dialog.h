@@ -30,8 +30,11 @@ class SshSetupDialog : public wxDialog {
 public:
     // `passphrase` is what the key was created with — needed to load it into
     // the agent. Held in guarded memory and revealed only at the point of use.
+    // `default_host` seeds the host field — the open repository's remote when
+    // there is one, so the wizard targets the forge the user actually uses.
     SshSetupDialog(wxWindow* parent, repomancer::ssh::KeyInfo key,
-                   const std::string& passphrase);
+                   const std::string& passphrase,
+                   const std::string& default_host);
     ~SshSetupDialog() override;
 
 private:

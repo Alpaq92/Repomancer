@@ -23,6 +23,7 @@
 #include <repomancer/ssh/keys.h>
 #include <repomancer/vcs/git/git_driver.h>
 #include <repomancer/vcs/patch.h>
+#include <repomancer/vcs/remote_url.h>
 
 #include <wx/aboutdlg.h>
 #include <wx/aui/dockart.h>
@@ -1914,7 +1915,18 @@ void MainFrame::GenerateSshKey() {
         wxString::FromUTF8(key.fingerprint_sha256)));
     // Carry straight on into the rest of the wizard: agent, ssh config, host
     // key and a connection test, all driven from the key we just made.
-    repomancer::gui::SshSetupDialog setup(this, key, req.passphrase);
+    // Default the wizard's host to the open repository's remote, so the key is
+    // offered to the forge in use rather than an assumed one.
+    std::string host;
+    if (!repo_path_.empty()) {
+        GitDriver driver(git_config_);
+        if (auto url = driver.remote_url(repo_path_); url.ok()) {
+            if (auto parsed = repomancer::vcs::parse_remote_url(url.value())) {
+                host = parsed->host;
+            }
+        }
+    }
+    repomancer::gui::SshSetupDialog setup(this, key, req.passphrase, host);
     setup.ShowModal();
 }
 
