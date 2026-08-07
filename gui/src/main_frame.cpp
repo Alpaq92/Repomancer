@@ -4,6 +4,7 @@
 #include "main_frame.h"
 
 #include "blame_dialog.h"
+#include "clone_dialog.h"
 #include "commit_dialog.h"
 #include "file_history_dialog.h"
 #include "gtk_header_bar.h"
@@ -73,6 +74,7 @@ enum {
     ID_AbortMerge,
     ID_GenerateSshKey,
     ID_SetUpSshKey,
+    ID_Clone,
 };
 } // namespace
 
@@ -110,6 +112,11 @@ MainFrame::MainFrame() {
                                      _("Open a local git repository"));
     open_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kFolderGit));
     file_menu->Append(open_item);
+    auto* clone_item = new wxMenuItem(file_menu, ID_Clone, _("&Clone Repository…"),
+                                      _("Clone a remote repository into a new folder"));
+    clone_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kGitFork));
+    file_menu->Append(clone_item);
     recent_menu_ = new wxMenu;
     auto* recent_item = new wxMenuItem(file_menu, wxID_ANY, _("Open &Recent"),
                                        wxEmptyString, wxITEM_NORMAL, recent_menu_);
@@ -607,6 +614,8 @@ MainFrame::MainFrame() {
          ID_GenerateSshKey);
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { SetUpExistingSshKey(); },
          ID_SetUpSshKey);
+    // Cloning needs no open repository — it creates one.
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { CloneRepository(); }, ID_Clone);
     Bind(
         wxEVT_MENU,
         [this](wxCommandEvent&) {
@@ -1888,6 +1897,53 @@ MainFrame::~MainFrame() {
 }
 
 void MainFrame::OnPreferences(wxCommandEvent&) { OpenPreferences(); }
+
+void MainFrame::CloneRepository() {
+    if (busy_.load() || op_running_.load()) {
+        wxBell();
+        return;
+    }
+    // New clones land beside the repository in use, or in the home directory.
+    std::filesystem::path parent =
+        repo_path_.empty() ? std::filesystem::path(
+                                 std::string(wxGetHomeDir().utf8_string()))
+                           : repo_path_.parent_path();
+
+    repomancer::gui::CloneDialog dialog(this, std::move(parent));
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::string url = dialog.Url();
+    const std::filesystem::path destination = dialog.Destination();
+
+    // Same streaming progress view the other remote operations use; it owns
+    // the worker thread and honours Cancel.
+    repomancer::gui::RemoteProgressDialog progress(
+        this, wxString::Format(_("Cloning %s"), wxString::FromUTF8(url)),
+        [this, url, destination](const repomancer::proc::ChunkSink& sink,
+                                 const std::atomic<bool>* cancel) {
+            // A fresh clone is not yet trusted; the driver used here only
+            // fetches, and the repository is opened through the usual trust
+            // gate afterwards.
+            repomancer::vcs::git::GitDriver driver(git_config_);
+            return driver.clone(url, destination, sink, cancel);
+        });
+    const auto result = progress.Run();
+    if (result.ok()) {
+        SetStatusText(wxString::Format(_("Cloned into %s"),
+                                       wxString::FromUTF8(destination.string())));
+        LoadRepository(wxString::FromUTF8(destination.string()));
+        return;
+    }
+    if (result.error().kind == repomancer::vcs::VcsError::Kind::Cancelled) {
+        SetStatusText(_("Clone cancelled"));
+        // git leaves a partial directory behind when it is interrupted.
+        std::error_code ec;
+        std::filesystem::remove_all(destination, ec);
+        return;
+    }
+    SetStatusText(_("Clone failed: ") + repomancer::gui::error_text(result.error()));
+}
 
 void MainFrame::GenerateSshKey() {
     namespace ssh = repomancer::ssh;

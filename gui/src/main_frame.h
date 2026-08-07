@@ -78,6 +78,8 @@ private:
     void OnPreferences(wxCommandEvent& event);
     // Opens the SSH-key generation dialog (Tools ▸ Generate SSH Key). App-global.
     void GenerateSshKey();
+    // Clones a remote repository and opens it. Needs no open repository.
+    void CloneRepository();
     // Runs the setup wizard against a key that already exists on disk.
     void SetUpExistingSshKey();
     // The host the SSH wizard should target: the open repository's remote, or
