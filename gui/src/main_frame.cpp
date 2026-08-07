@@ -75,6 +75,7 @@ enum {
     ID_GenerateSshKey,
     ID_SetUpSshKey,
     ID_Clone,
+    ID_NewRepo,
 };
 } // namespace
 
@@ -117,6 +118,11 @@ MainFrame::MainFrame() {
     clone_item->SetBitmap(
         repomancer::gui::icons::menu_icon(repomancer::gui::icons::kGitFork));
     file_menu->Append(clone_item);
+    auto* new_repo_item = new wxMenuItem(file_menu, ID_NewRepo, _("&New Repository…"),
+                                         _("Create a new git repository in a folder"));
+    new_repo_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kGitBranchPlus));
+    file_menu->Append(new_repo_item);
     recent_menu_ = new wxMenu;
     auto* recent_item = new wxMenuItem(file_menu, wxID_ANY, _("Open &Recent"),
                                        wxEmptyString, wxITEM_NORMAL, recent_menu_);
@@ -616,6 +622,7 @@ MainFrame::MainFrame() {
          ID_SetUpSshKey);
     // Cloning needs no open repository — it creates one.
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { CloneRepository(); }, ID_Clone);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { NewRepository(); }, ID_NewRepo);
     Bind(
         wxEVT_MENU,
         [this](wxCommandEvent&) {
@@ -1723,7 +1730,12 @@ void MainFrame::PopulateRepoDetails(
 
     if (rows.empty()) {
         Row row;
-        row.text = _("No repository information");
+        // A repository that reads fine but has nothing to show is simply new:
+        // no commits, so no branches, contributors or languages either. Saying
+        // "no information" there reads as a failure to someone who has just
+        // created their first repository.
+        row.text = status.ok() ? _("No commits yet")
+                               : _("No repository information");
         rows.push_back(std::move(row));
     }
     repo_view_->SetRows(std::move(rows));
@@ -1967,6 +1979,48 @@ MainFrame::~MainFrame() {
 }
 
 void MainFrame::OnPreferences(wxCommandEvent&) { OpenPreferences(); }
+
+void MainFrame::NewRepository() {
+    if (busy_.load() || op_running_.load()) {
+        wxBell();
+        return;
+    }
+    const wxString start =
+        repo_path_.empty() ? wxGetHomeDir()
+                           : wxString::FromUTF8(repo_path_.parent_path().string());
+    // The picker's "create folder" affordance is the natural way to name a new
+    // project, so no separate name field is needed.
+    wxDirDialog picker(this, _("Create the repository in this folder"), start,
+                       wxDD_DEFAULT_STYLE);
+    if (picker.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::filesystem::path path(std::string(picker.GetPath().utf8_string()));
+
+    repomancer::vcs::git::GitDriver driver(git_config_);
+    const auto result = driver.init(path);
+    if (!result.ok()) {
+        wxMessageBox(repomancer::gui::error_text(result.error()),
+                     _("New Repository"), wxOK | wxICON_ERROR, this);
+        return;
+    }
+    // A repository the user just created here is empty and carries no
+    // third-party configuration, so the trust gate has nothing to guard
+    // against. Asking anyway would be noise that teaches people to click
+    // through the prompt that matters for repositories they did not write.
+    // (A clone is different — it brings the origin's configuration with it.)
+    {
+        std::error_code canon;
+        const auto canonical = std::filesystem::weakly_canonical(path, canon);
+        auto settings = repomancer::load_settings();
+        repomancer::remember_trusted_repo(
+            settings, canon ? path.string() : canonical.string());
+        repomancer::save_settings(settings);
+    }
+    SetStatusText(wxString::Format(_("Created a repository in %s"),
+                                   wxString::FromUTF8(path.string())));
+    LoadRepository(wxString::FromUTF8(path.string()));
+}
 
 void MainFrame::CloneRepository() {
     if (busy_.load() || op_running_.load()) {

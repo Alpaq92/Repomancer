@@ -80,6 +80,8 @@ private:
     void GenerateSshKey();
     // Clones a remote repository and opens it. Needs no open repository.
     void CloneRepository();
+    // Creates a new repository in a chosen folder and opens it.
+    void NewRepository();
     // Runs the setup wizard against a key that already exists on disk.
     void SetUpExistingSshKey();
     // The host the SSH wizard should target: the open repository's remote, or
