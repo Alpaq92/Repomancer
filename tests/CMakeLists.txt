@@ -13,6 +13,7 @@ add_executable(repomancer-tests
   test_blame.cpp
   test_patch.cpp
   test_refs.cpp
+  test_remote_url.cpp
   test_stats.cpp
   test_process_runner.cpp
   test_settings.cpp

@@ -318,6 +318,22 @@ VcsResult<std::string> GitDriver::commit(const std::filesystem::path& repo,
     return run_to_string(proc::ProcessRunner::run(spec));
 }
 
+VcsResult<std::string> GitDriver::remote_url(const std::filesystem::path& repo,
+                                             const std::string& remote) const {
+    // `config --get` rather than `remote get-url`: it is the older, universally
+    // available spelling and takes the name as a config key, never as an option.
+    const auto run = proc::ProcessRunner::run(
+        make_spec(&repo, {"config", "--get", "remote." + remote + ".url"}));
+    if (!run.ok()) {
+        return std::string{}; // no such remote — nothing to suggest
+    }
+    std::string url = run.out;
+    while (!url.empty() && (url.back() == '\n' || url.back() == '\r')) {
+        url.pop_back();
+    }
+    return url;
+}
+
 VcsResult<std::string> GitDriver::head_message(const std::filesystem::path& repo) const {
     const auto run = proc::ProcessRunner::run(
         make_spec(&repo, {"log", "-1", "--format=%B", "--end-of-options", "HEAD"}));

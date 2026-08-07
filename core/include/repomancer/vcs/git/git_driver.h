@@ -106,6 +106,13 @@ public:
     [[nodiscard]] VcsResult<std::string> head_message(
         const std::filesystem::path& repo) const;
 
+    // The configured URL of `remote` ("origin" by default), verbatim. Empty
+    // when the remote does not exist — the wizard treats that as "no host to
+    // suggest", not an error.
+    [[nodiscard]] VcsResult<std::string> remote_url(
+        const std::filesystem::path& repo,
+        const std::string& remote = "origin") const;
+
     // Merges `branch` into the current branch. `no_ff` forces a merge
     // commit even for fast-forwards. On conflicts git exits non-zero and
     // leaves the merge in progress (status().merging becomes true, with

@@ -9,6 +9,7 @@ add_library(repomancer-core STATIC
   src/vcs/diff.cpp
   src/vcs/patch.cpp
   src/vcs/refs.cpp
+  src/vcs/remote_url.cpp
   src/vcs/stats.cpp
   src/vcs/git/porcelain.cpp
   src/vcs/git/log_format.cpp
