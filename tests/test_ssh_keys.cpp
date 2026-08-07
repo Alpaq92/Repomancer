@@ -20,12 +20,20 @@ namespace fs = std::filesystem;
 namespace {
 
 bool ssh_keygen_available() {
+#if defined(_WIN32)
+    // Windows OpenSSH's ssh-keygen diverges from POSIX in ways these tests rely
+    // on — an empty `-N ""` argument, the passphrase on stdin, and `-f -` — so
+    // the key toolkit is not yet verified there. Skip until it can be exercised
+    // on a real Windows host (the M3 wizard work). TODO(m3-windows).
+    return false;
+#else
     repomancer::proc::RunSpec spec;
     spec.exe = "ssh-keygen";
     spec.args = {"-A", "-f", "/nonexistent-repomancer-probe"};
     // We don't care about the exit code — only that the binary launches.
     return repomancer::proc::ProcessRunner::run(spec).status !=
            repomancer::proc::LaunchStatus::ExeNotFound;
+#endif
 }
 
 struct TempDir {

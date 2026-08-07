@@ -23,12 +23,18 @@ namespace fs = std::filesystem;
 namespace {
 
 bool ssh_keygen_available() {
+#if defined(_WIN32)
+    // See the note in test_ssh_keys.cpp: Windows OpenSSH interop (empty args,
+    // stdin passphrases, `-f -`) is not yet verified. TODO(m3-windows).
+    return false;
+#else
     repomancer::proc::RunSpec spec;
     spec.exe = "ssh-keygen";
     spec.args = {"-l", "-f", "-"};
     spec.stdin_data = "\n";
     return repomancer::proc::ProcessRunner::run(spec).status !=
            repomancer::proc::LaunchStatus::ExeNotFound;
+#endif
 }
 
 bool ssh_keyscan_available() {

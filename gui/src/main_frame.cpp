@@ -766,8 +766,10 @@ private:
 };
 
 // RFC 3986 percent-encoding for a file:// URI path (keeps '/' and the
-// unreserved set). The input is UTF-8 bytes.
-std::string percent_encode_path(const std::string& path) {
+// unreserved set). The input is UTF-8 bytes. [[maybe_unused]] because only the
+// Linux reveal path (the gdbus FileManager1 branch) needs it — macOS uses
+// `open -R` and Windows `explorer /select`, leaving it unreferenced there.
+[[maybe_unused]] std::string percent_encode_path(const std::string& path) {
     static const char* kHex = "0123456789ABCDEF";
     std::string out;
     out.reserve(path.size());

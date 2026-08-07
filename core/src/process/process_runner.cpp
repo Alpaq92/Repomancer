@@ -14,6 +14,8 @@
 
 #if defined(_WIN32)
 #include <cstdlib> // _environ
+#elif defined(__APPLE__)
+#include <crt_externs.h> // _NSGetEnviron (environ is not linkable from a dylib)
 #else
 extern "C" char** environ;
 #endif
@@ -32,6 +34,8 @@ std::map<std::string, std::string> merged_environment(
     const std::map<std::string, std::string>& extra) {
 #if defined(_WIN32)
     char** env = _environ;
+#elif defined(__APPLE__)
+    char** env = *_NSGetEnviron();
 #else
     char** env = environ;
 #endif
