@@ -989,6 +989,13 @@ void MainFrame::OnBranchMenu(const wxString& branch) {
     menu.Append(merge_item);
     // Merging a branch into itself is a no-op; only offer it for others.
     merge_item->Enable(name != current_branch_);
+    menu.AppendSeparator();
+    auto* delete_item = new wxMenuItem(
+        &menu, wxID_ANY, wxString::Format(_("&Delete \"%s\"…"), branch));
+    delete_item->SetBitmap(menu_icon(repomancer::gui::icons::kBan));
+    menu.Append(delete_item);
+    // git refuses to delete the checked-out branch; do not offer it either.
+    delete_item->Enable(name != current_branch_);
     menu.Bind(
         wxEVT_MENU, [this, name](wxCommandEvent&) { SwitchBranch(name); },
         switch_item->GetId());
@@ -1021,6 +1028,9 @@ void MainFrame::OnBranchMenu(const wxString& branch) {
             }
         },
         new_branch_item->GetId());
+    menu.Bind(
+        wxEVT_MENU, [this, name](wxCommandEvent&) { DeleteBranch(name); },
+        delete_item->GetId());
     repo_view_->PopupMenu(&menu);
 }
 
@@ -1036,6 +1046,66 @@ void MainFrame::SwitchBranch(const std::string& branch) {
             return GitDriver(config).switch_branch(repo, branch);
         },
         [this](std::string) { ReloadRepository(); });
+}
+
+void MainFrame::DeleteBranch(const std::string& branch) {
+    if (!RepoWritable()) {
+        return;
+    }
+    wxMessageDialog confirm(
+        this, wxString::Format(_("Delete the branch \"%s\"?"),
+                               wxString::FromUTF8(branch)),
+        _("Delete Branch"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION);
+    if (confirm.ShowModal() != wxID_YES) {
+        return;
+    }
+    SetStatusText(wxString::Format(_("Deleting %s..."), wxString::FromUTF8(branch)));
+    RunGitOp(
+        _("Delete failed: "),
+        [branch](const std::filesystem::path& repo,
+                 const repomancer::vcs::git::GitConfig& config) {
+            GitDriver driver(config);
+            return driver.delete_branch(repo, branch);
+        },
+        [this, branch](const std::string&) {
+            SetStatusText(wxString::Format(_("Deleted %s"),
+                                           wxString::FromUTF8(branch)));
+            ReloadRepository();
+        },
+        [this, branch](const repomancer::vcs::VcsError& error) {
+            // git refuses a branch whose commits are not merged anywhere. That
+            // is worth stopping for: forcing it discards those commits, so ask
+            // plainly rather than burying it in a status message.
+            if (error.stderr_excerpt.find("not fully merged") == std::string::npos) {
+                SetStatusText(_("Delete failed: ") +
+                              repomancer::gui::error_text(error));
+                return;
+            }
+            wxMessageDialog force(
+                this,
+                wxString::Format(
+                    _("\"%s\" has commits that are not merged anywhere.\n\n"
+                      "Deleting it discards them, and there is no undo."),
+                    wxString::FromUTF8(branch)),
+                _("Delete Branch"), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING);
+            force.SetYesNoLabels(_("Delete anyway"), _("Keep"));
+            if (force.ShowModal() != wxID_YES) {
+                SetStatusText(_("Branch kept"));
+                return;
+            }
+            RunGitOp(
+                _("Delete failed: "),
+                [branch](const std::filesystem::path& repo,
+                         const repomancer::vcs::git::GitConfig& config) {
+                    GitDriver driver(config);
+                    return driver.delete_branch(repo, branch, /*force=*/true);
+                },
+                [this, branch](const std::string&) {
+                    SetStatusText(wxString::Format(_("Deleted %s"),
+                                                   wxString::FromUTF8(branch)));
+                    ReloadRepository();
+                });
+        });
 }
 
 void MainFrame::CreateBranch(const std::string& branch) {

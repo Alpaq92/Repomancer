@@ -184,6 +184,7 @@ private:
     void OnBranchMenu(const wxString& branch);
     void SwitchBranch(const std::string& branch);
     void CreateBranch(const std::string& branch);
+    void DeleteBranch(const std::string& branch);
     void PopulateRepoDetails(
         const repomancer::vcs::VcsResult<repomancer::vcs::StatusSnapshot>& status,
         const repomancer::vcs::VcsResult<std::vector<repomancer::vcs::Ref>>& refs,
