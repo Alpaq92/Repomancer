@@ -166,6 +166,12 @@ public:
     // A non-empty `sink` streams git's --progress output (which goes to
     // stderr) live; `cancel`, when it flips true, stops the transfer and the
     // result is Cancelled. Both default off for a plain blocking call.
+    // Create a new repository at `path`, creating the directory if needed.
+    // An existing repository is refused: `git init` would silently
+    // "reinitialize" it, which reads as success but is not what was asked.
+    // The initial branch name is left to the user's init.defaultBranch.
+    [[nodiscard]] VcsResult<std::string> init(const std::filesystem::path& path) const;
+
     // Clone `url` into `destination`, which must not already exist. Streams
     // git's progress like fetch/pull/push. No repository exists yet, so this
     // runs outside one and the trust gate does not apply — the clone itself

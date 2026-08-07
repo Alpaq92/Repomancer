@@ -1257,3 +1257,46 @@ TEST_CASE("git integration: delete_branch refuses the checked-out branch") {
     GitDriver driver;
     CHECK_FALSE(driver.delete_branch(repo.path(), "main").ok());
 }
+
+TEST_CASE("git integration: init creates a usable repository") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    const auto dir = std::filesystem::temp_directory_path() / "repomancer-init-new";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    GitDriver driver;
+
+    REQUIRE(driver.init(dir).ok());
+    CHECK(std::filesystem::exists(dir / ".git"));
+    // It is a working repository: status answers, with nothing in it yet.
+    const auto status = driver.status(dir);
+    REQUIRE(status.ok());
+    CHECK(status.value().entries.empty());
+
+    // A second init on the same path is refused rather than silently
+    // reinitializing, which git would otherwise report as success.
+    const auto again = driver.init(dir);
+    REQUIRE_FALSE(again.ok());
+    CHECK(again.error().message.find("already a git repository") != std::string::npos);
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("git integration: init creates missing parent directories") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    const auto base = std::filesystem::temp_directory_path() / "repomancer-init-deep";
+    std::error_code ec;
+    std::filesystem::remove_all(base, ec);
+    GitDriver driver;
+    REQUIRE(driver.init(base / "a" / "b" / "project").ok());
+    CHECK(std::filesystem::exists(base / "a" / "b" / "project" / ".git"));
+    std::filesystem::remove_all(base, ec);
+}
+
+TEST_CASE("git integration: init rejects an empty path") {
+    GitDriver driver;
+    CHECK_FALSE(driver.init("").ok());
+}

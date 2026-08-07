@@ -455,6 +455,24 @@ VcsResult<std::string> run_maybe_streaming(proc::RunSpec spec,
 
 } // namespace
 
+VcsResult<std::string> GitDriver::init(const std::filesystem::path& path) const {
+    if (path.empty()) {
+        return VcsError{VcsError::Kind::ParseError, "no path given"};
+    }
+    std::error_code ec;
+    if (std::filesystem::exists(path / ".git", ec)) {
+        return VcsError{VcsError::Kind::ParseError,
+                        "already a git repository: " + path.string()};
+    }
+    std::filesystem::create_directories(path, ec);
+    if (ec) {
+        return VcsError{VcsError::Kind::ParseError,
+                        "could not create " + path.string() + ": " + ec.message()};
+    }
+    return run_to_string(proc::ProcessRunner::run(
+        make_spec(nullptr, {"init", "--end-of-options", path.string()})));
+}
+
 VcsResult<std::string> GitDriver::clone(const std::string& url,
                                         const std::filesystem::path& destination,
                                         const proc::ChunkSink& sink,
