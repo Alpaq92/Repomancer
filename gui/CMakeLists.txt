@@ -33,6 +33,8 @@ add_executable(repomancer WIN32 MACOSX_BUNDLE
   src/log_view.cpp
   src/blame_dialog.cpp
   src/commit_dialog.cpp
+  src/ssh_key_dialog.cpp
+  src/entropy_dialog.cpp
   src/file_history_dialog.cpp
   src/preferences_dialog.cpp
   src/repo_view.cpp

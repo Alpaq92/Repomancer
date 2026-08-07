@@ -10,12 +10,16 @@
 #include "icons.h"
 #include "pane_header.h"
 #include "preferences_dialog.h"
+#include "entropy_dialog.h"
 #include "remote_progress_dialog.h"
+#include "ssh_key_dialog.h"
 #include "text_sanitize.h"
 #include "theme.h"
 #include "title_bar.h"
 
 #include <repomancer/settings.h>
+#include <repomancer/ssh/entropy.h>
+#include <repomancer/ssh/keys.h>
 #include <repomancer/vcs/git/git_driver.h>
 #include <repomancer/vcs/patch.h>
 
@@ -64,6 +68,7 @@ enum {
     ID_TrustRepo,
     ID_CommitMerge,
     ID_AbortMerge,
+    ID_GenerateSshKey,
 };
 } // namespace
 
@@ -183,6 +188,14 @@ MainFrame::MainFrame() {
     style_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kGitPullRequestArrow));
     view_menu->Append(style_item);
 
+    auto* tools_menu = new wxMenu;
+    auto* keygen_item = new wxMenuItem(tools_menu, ID_GenerateSshKey,
+                                       _("Generate SSH &Key…"),
+                                       _("Create a new SSH key pair"));
+    keygen_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kKeyRound));
+    tools_menu->Append(keygen_item);
+
     auto* help_menu = new wxMenu;
     auto* about_item = new wxMenuItem(help_menu, wxID_ABOUT);
     about_item->SetBitmap(repomancer::gui::icons::menu_icon(repomancer::gui::icons::kBook));
@@ -197,6 +210,7 @@ MainFrame::MainFrame() {
         file_menu_owned_.reset(file_menu);
         repo_menu_owned_.reset(repo_menu);
         view_menu_owned_.reset(view_menu);
+        tools_menu_owned_.reset(tools_menu);
         help_menu_owned_.reset(help_menu);
         using Buttons = repomancer::gui::TitleBar::Buttons;
         const Buttons buttons =
@@ -207,6 +221,7 @@ MainFrame::MainFrame() {
             {{_("File"), file_menu},
              {_("Repository"), repo_menu},
              {_("View"), view_menu},
+             {_("Tools"), tools_menu},
              {_("Help"), help_menu}},
             buttons);
         SetBorderColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
@@ -227,6 +242,7 @@ MainFrame::MainFrame() {
         menu_bar->Append(file_menu, _("&File"));
         menu_bar->Append(repo_menu, _("&Repository"));
         menu_bar->Append(view_menu, _("&View"));
+        menu_bar->Append(tools_menu, _("&Tools"));
         menu_bar->Append(help_menu, _("&Help"));
         SetMenuBar(menu_bar);
     }
@@ -576,6 +592,9 @@ MainFrame::MainFrame() {
     Bind(wxEVT_MENU, repo_op(&MainFrame::PopStash), ID_StashPop);
     Bind(wxEVT_MENU, repo_op(&MainFrame::CommitMerge), ID_CommitMerge);
     Bind(wxEVT_MENU, repo_op(&MainFrame::AbortMerge), ID_AbortMerge);
+    // SSH key generation is app-global — it needs no open repository.
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { GenerateSshKey(); },
+         ID_GenerateSshKey);
     Bind(
         wxEVT_MENU,
         [this](wxCommandEvent&) {
@@ -1857,6 +1876,48 @@ MainFrame::~MainFrame() {
 }
 
 void MainFrame::OnPreferences(wxCommandEvent&) { OpenPreferences(); }
+
+void MainFrame::GenerateSshKey() {
+    namespace ssh = repomancer::ssh;
+    repomancer::gui::SshKeyDialog dialog(this, ssh::default_key_dir());
+    if (dialog.ShowModal() != wxID_OK) {
+        return;
+    }
+    const ssh::GenerateRequest req = dialog.request();
+
+    // The optional key ceremony: the user stirs the seed by hand, and our own
+    // Ed25519 generator uses it. Cancelling the ceremony cancels the key.
+    std::vector<std::uint8_t> seed;
+    if (dialog.UseCeremony()) {
+        repomancer::gui::EntropyDialog ceremony(this);
+        if (ceremony.ShowModal() != wxID_OK) {
+            return;
+        }
+        seed = ceremony.seed();
+    }
+
+    ssh::SshResult<ssh::KeyInfo> result = [&] {
+        wxBusyCursor busy; // ed25519 is instant; RSA can take a moment
+        return seed.empty() ? ssh::generate(req)
+                            : ssh::generate_from_seed(req, seed);
+    }();
+    if (!result.ok()) {
+        wxMessageBox(wxString::FromUTF8(result.error().message),
+                     _("Key generation failed"), wxOK | wxICON_ERROR, this);
+        return;
+    }
+    const ssh::KeyInfo& key = result.value();
+    CopyToClipboard(wxString::FromUTF8(key.public_key));
+    SetStatusText(wxString::Format(
+        _("Generated %s — public key copied to the clipboard"),
+        wxString::FromUTF8(key.fingerprint_sha256)));
+    wxMessageBox(
+        wxString::Format(_("A new SSH key was created:\n\n%s\n%s\n\nThe public "
+                           "key has been copied to the clipboard."),
+                         wxString::FromUTF8(key.private_path.string()),
+                         wxString::FromUTF8(key.fingerprint_sha256)),
+        _("SSH key generated"), wxOK | wxICON_INFORMATION, this);
+}
 
 void MainFrame::OpenPreferences() {
     const auto before = repomancer::load_settings();

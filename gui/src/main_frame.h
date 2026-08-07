@@ -76,6 +76,8 @@ private:
     void AppendFileRow(const wxString& change, const std::string& path,
                        const std::string& old_path);
     void OnPreferences(wxCommandEvent& event);
+    // Opens the SSH-key generation dialog (Tools ▸ Generate SSH Key). App-global.
+    void GenerateSshKey();
     void RebuildRecentMenu();
     // Fetches and shows the history of the changed file at `index`.
     void ShowFileHistory(const std::string& path);
@@ -206,6 +208,7 @@ private:
     std::unique_ptr<wxMenu> file_menu_owned_;
     std::unique_ptr<wxMenu> repo_menu_owned_;
     std::unique_ptr<wxMenu> view_menu_owned_;
+    std::unique_ptr<wxMenu> tools_menu_owned_;
     std::unique_ptr<wxMenu> help_menu_owned_;
     wxMenu* recent_menu_ = nullptr; // owned by the File menu
     wxMenuItem* merge_commit_item_ = nullptr; // enabled only while merging
