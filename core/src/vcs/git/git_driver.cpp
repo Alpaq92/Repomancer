@@ -445,6 +445,28 @@ VcsResult<std::string> run_maybe_streaming(proc::RunSpec spec,
 
 } // namespace
 
+VcsResult<std::string> GitDriver::clone(const std::string& url,
+                                        const std::filesystem::path& destination,
+                                        const proc::ChunkSink& sink,
+                                        const std::atomic<bool>* cancel) const {
+    if (url.empty()) {
+        return VcsError{VcsError::Kind::ParseError, "no repository URL given"};
+    }
+    if (destination.empty()) {
+        return VcsError{VcsError::Kind::ParseError, "no destination given"};
+    }
+    std::error_code ec;
+    if (std::filesystem::exists(destination, ec)) {
+        return VcsError{VcsError::Kind::ParseError,
+                        "destination already exists: " + destination.string()};
+    }
+    // `--` stops option parsing: a URL beginning with '-' must never be read
+    // as a git option (§13.1 — the URL is attacker-influenced input).
+    return run_maybe_streaming(
+        make_spec(nullptr, {"clone", "--progress", "--", url, destination.string()}),
+        sink, cancel);
+}
+
 VcsResult<std::string> GitDriver::fetch(const std::filesystem::path& repo,
                                         const proc::ChunkSink& sink,
                                         const std::atomic<bool>* cancel) const {

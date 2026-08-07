@@ -1159,3 +1159,49 @@ TEST_CASE("git integration: read-only refuses merge operations", "[integration]"
     CHECK(refused(driver.merge_abort(repo.path())));
     CHECK(refused(driver.checkout_conflict(repo.path(), "a.txt", true)));
 }
+
+TEST_CASE("git integration: clone copies a repository and streams progress") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    const auto dest =
+        std::filesystem::temp_directory_path() / "repomancer-clone-fixture";
+    std::error_code pre;
+    std::filesystem::remove_all(dest, pre); // a previous run may have left it
+    GitDriver driver;
+
+    std::string streamed;
+    const auto result = driver.clone(repo.path().string(), dest,
+                                     [&](std::string_view chunk, bool) {
+                                         streamed.append(chunk);
+                                     });
+    REQUIRE(result.ok());
+    CHECK(std::filesystem::exists(dest / ".git"));
+    // The clone is a working repository: its log carries the fixture history.
+    const auto log = driver.log(dest, {});
+    REQUIRE(log.ok());
+    CHECK_FALSE(log.value().empty());
+
+    std::error_code ec;
+    std::filesystem::remove_all(dest, ec);
+}
+
+TEST_CASE("git integration: clone refuses an existing destination") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    // The fixture's own path certainly exists — cloning onto it must be
+    // refused rather than letting git decide.
+    const auto result = driver.clone(repo.path().string(), repo.path());
+    REQUIRE_FALSE(result.ok());
+    CHECK(result.error().message.find("already exists") != std::string::npos);
+}
+
+TEST_CASE("git integration: clone rejects empty url or destination") {
+    GitDriver driver;
+    CHECK_FALSE(driver.clone("", "/tmp/repomancer-nowhere").ok());
+    CHECK_FALSE(driver.clone("https://example.invalid/r.git", "").ok());
+}

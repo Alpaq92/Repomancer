@@ -158,6 +158,15 @@ public:
     // A non-empty `sink` streams git's --progress output (which goes to
     // stderr) live; `cancel`, when it flips true, stops the transfer and the
     // result is Cancelled. Both default off for a plain blocking call.
+    // Clone `url` into `destination`, which must not already exist. Streams
+    // git's progress like fetch/pull/push. No repository exists yet, so this
+    // runs outside one and the trust gate does not apply — the clone itself
+    // executes no repository-supplied configuration.
+    [[nodiscard]] VcsResult<std::string> clone(
+        const std::string& url, const std::filesystem::path& destination,
+        const proc::ChunkSink& sink = {},
+        const std::atomic<bool>* cancel = nullptr) const;
+
     [[nodiscard]] VcsResult<std::string> fetch(
         const std::filesystem::path& repo, const proc::ChunkSink& sink = {},
         const std::atomic<bool>* cancel = nullptr) const;
