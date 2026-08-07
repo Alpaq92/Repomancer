@@ -78,6 +78,11 @@ private:
     void OnPreferences(wxCommandEvent& event);
     // Opens the SSH-key generation dialog (Tools ▸ Generate SSH Key). App-global.
     void GenerateSshKey();
+    // Runs the setup wizard against a key that already exists on disk.
+    void SetUpExistingSshKey();
+    // The host the SSH wizard should target: the open repository's remote, or
+    // empty when there is no repository or no parsable remote.
+    [[nodiscard]] std::string RemoteHostForWizard();
     void RebuildRecentMenu();
     // Fetches and shows the history of the changed file at `index`.
     void ShowFileHistory(const std::string& path);

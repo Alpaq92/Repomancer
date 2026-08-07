@@ -37,6 +37,7 @@
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/stdpaths.h>
+#include <wx/choicdlg.h>
 #include <wx/textdlg.h>
 #include <wx/utils.h>
 
@@ -71,6 +72,7 @@ enum {
     ID_CommitMerge,
     ID_AbortMerge,
     ID_GenerateSshKey,
+    ID_SetUpSshKey,
 };
 } // namespace
 
@@ -197,6 +199,12 @@ MainFrame::MainFrame() {
     keygen_item->SetBitmap(
         repomancer::gui::icons::menu_icon(repomancer::gui::icons::kKeyRound));
     tools_menu->Append(keygen_item);
+    auto* setup_item = new wxMenuItem(
+        tools_menu, ID_SetUpSshKey, _("Set Up an &Existing Key…"),
+        _("Load an existing key into the agent, configure a host and test it"));
+    setup_item->SetBitmap(
+        repomancer::gui::icons::menu_icon(repomancer::gui::icons::kSquareArrowRightEnter));
+    tools_menu->Append(setup_item);
 
     auto* help_menu = new wxMenu;
     auto* about_item = new wxMenuItem(help_menu, wxID_ABOUT);
@@ -597,6 +605,8 @@ MainFrame::MainFrame() {
     // SSH key generation is app-global — it needs no open repository.
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { GenerateSshKey(); },
          ID_GenerateSshKey);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { SetUpExistingSshKey(); },
+         ID_SetUpSshKey);
     Bind(
         wxEVT_MENU,
         [this](wxCommandEvent&) {
@@ -1915,18 +1925,78 @@ void MainFrame::GenerateSshKey() {
         wxString::FromUTF8(key.fingerprint_sha256)));
     // Carry straight on into the rest of the wizard: agent, ssh config, host
     // key and a connection test, all driven from the key we just made.
-    // Default the wizard's host to the open repository's remote, so the key is
-    // offered to the forge in use rather than an assumed one.
-    std::string host;
-    if (!repo_path_.empty()) {
-        GitDriver driver(git_config_);
-        if (auto url = driver.remote_url(repo_path_); url.ok()) {
-            if (auto parsed = repomancer::vcs::parse_remote_url(url.value())) {
-                host = parsed->host;
-            }
+    repomancer::gui::SshSetupDialog setup(this, key, req.passphrase,
+                                          RemoteHostForWizard());
+    setup.ShowModal();
+}
+
+std::string MainFrame::RemoteHostForWizard() {
+    // The open repository's remote, so the wizard targets the forge in use
+    // rather than an assumed one. Empty when there is nothing to go on.
+    if (repo_path_.empty()) {
+        return {};
+    }
+    GitDriver driver(git_config_);
+    if (auto url = driver.remote_url(repo_path_); url.ok()) {
+        if (auto parsed = repomancer::vcs::parse_remote_url(url.value())) {
+            return parsed->host;
         }
     }
-    repomancer::gui::SshSetupDialog setup(this, key, req.passphrase, host);
+    return {};
+}
+
+void MainFrame::SetUpExistingSshKey() {
+    namespace ssh = repomancer::ssh;
+    const auto dir = ssh::default_key_dir();
+    auto listed = ssh::list_keys(dir);
+    if (!listed.ok()) {
+        wxMessageBox(wxString::FromUTF8(listed.error().message),
+                     _("Could not read your keys"), wxOK | wxICON_ERROR, this);
+        return;
+    }
+    const auto& keys = listed.value();
+    if (keys.empty()) {
+        wxMessageBox(wxString::Format(
+                         _("No SSH keys found in %s.\n\nUse Generate SSH Key to "
+                           "create one."),
+                         wxString::FromUTF8(dir.string())),
+                     _("Set Up SSH Key"), wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    wxArrayString choices;
+    for (const auto& k : keys) {
+        wxString label = wxString::FromUTF8(k.private_path.filename().string());
+        label += wxString::Format("  (%s %d)",
+                                  wxString::FromUTF8(ssh::to_string(k.type)), k.bits);
+        if (!k.comment.empty()) {
+            label += "  " + wxString::FromUTF8(k.comment);
+        }
+        choices.Add(label);
+    }
+    const int picked = wxGetSingleChoiceIndex(
+        _("Which key would you like to set up?"), _("Set Up SSH Key"), choices, 0, this);
+    if (picked < 0) {
+        return; // cancelled
+    }
+    const ssh::KeyInfo& key = keys[static_cast<std::size_t>(picked)];
+
+    // Loading a protected key into the agent needs its passphrase; an
+    // unencrypted one must never prompt for something it does not have.
+    std::string passphrase;
+    if (auto enc = ssh::is_encrypted(key.private_path); enc.ok() && enc.value()) {
+        const wxString entered = wxGetPasswordFromUser(
+            wxString::Format(_("Passphrase for %s"),
+                             wxString::FromUTF8(key.private_path.filename().string())),
+            _("Set Up SSH Key"), wxEmptyString, this);
+        if (entered.IsEmpty()) {
+            return; // cancelled, or nothing typed — do not try a blank passphrase
+        }
+        passphrase = std::string(entered.utf8_string());
+    }
+
+    repomancer::gui::SshSetupDialog setup(this, key, passphrase,
+                                          RemoteHostForWizard());
     setup.ShowModal();
 }
 
