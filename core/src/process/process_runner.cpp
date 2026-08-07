@@ -7,12 +7,47 @@
 #include <reproc++/reproc.hpp>
 
 #include <cstdint>
+#include <map>
+#include <string>
 #include <system_error>
 #include <utility>
+
+#if defined(_WIN32)
+#include <cstdlib> // _environ
+#else
+extern "C" char** environ;
+#endif
 
 namespace repomancer::proc {
 
 namespace {
+
+// The child environment as inherited-plus-overrides. reproc's env::extend
+// appends the extras *after* the inherited variables, and getenv() returns the
+// first match — so an inherited value would silently shadow an override
+// (defeating LC_ALL=C, SSH_AUTH_SOCK, and the git driver's env discipline).
+// Enumerate the parent environment and let env_extra win. Empty (only the
+// extras) if the platform environ pointer could not be read.
+std::map<std::string, std::string> merged_environment(
+    const std::map<std::string, std::string>& extra) {
+#if defined(_WIN32)
+    char** env = _environ;
+#else
+    char** env = environ;
+#endif
+    std::map<std::string, std::string> merged;
+    for (char** e = env; e != nullptr && *e != nullptr; ++e) {
+        const std::string entry(*e);
+        const auto eq = entry.find('=');
+        if (eq != std::string::npos) {
+            merged.emplace(entry.substr(0, eq), entry.substr(eq + 1));
+        }
+    }
+    for (const auto& [name, value] : extra) {
+        merged[name] = value; // override or add
+    }
+    return merged;
+}
 
 struct StreamingSink {
     std::string& capture;
@@ -50,8 +85,18 @@ RunResult run_impl(const RunSpec& spec, const ChunkSink* sink, const std::atomic
         options.working_directory = cwd_storage.c_str();
     }
     if (!spec.env_extra.empty()) {
-        options.env.behavior = reproc::env::extend;
-        options.env.extra = spec.env_extra;
+        // Supply the full merged environment so extras override same-named
+        // inherited vars. If the parent env could not be read (merged holds
+        // only the extras), fall back to extend so the child still inherits a
+        // working environment — losing only the override guarantee.
+        auto merged = merged_environment(spec.env_extra);
+        if (merged.size() > spec.env_extra.size()) {
+            options.env.behavior = reproc::env::empty;
+            options.env.extra = merged;
+        } else {
+            options.env.behavior = reproc::env::extend;
+            options.env.extra = spec.env_extra;
+        }
     }
     options.deadline = reproc::milliseconds(static_cast<int>(spec.timeout.count()));
     options.stop = reproc::stop_actions{
