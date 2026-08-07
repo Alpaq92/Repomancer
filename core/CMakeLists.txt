@@ -18,6 +18,7 @@ add_library(repomancer-core STATIC
   src/ssh/config.cpp
   src/ssh/known_hosts.cpp
   src/ssh/connection.cpp
+  src/ssh/entropy.cpp
   src/forge/oauth.cpp
   src/forge/api.cpp
   src/secret/secure_buffer.cpp

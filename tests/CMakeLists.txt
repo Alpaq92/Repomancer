@@ -25,6 +25,7 @@ add_executable(repomancer-tests
   test_forge_oauth.cpp
   test_forge_api.cpp
   test_secret.cpp
+  test_ssh_entropy.cpp
 )
 
 target_link_libraries(repomancer-tests PRIVATE

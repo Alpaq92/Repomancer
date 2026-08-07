@@ -72,6 +72,7 @@ struct SshError {
         ParseError,     // output did not match the expected format
         InvalidRequest, // caught before spawning (e.g. target already exists)
         IoError,        // a filesystem read/write failed (config, known_hosts)
+        Internal,       // a crypto primitive failed unexpectedly
     };
 
     SshError() = default;
