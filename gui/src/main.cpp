@@ -10,6 +10,11 @@
 #include <wx/cmdline.h>
 #include <wx/intl.h>
 
+#include <clocale>
+#ifndef _WIN32
+#include <langinfo.h>
+#endif
+
 #ifdef __WXGTK__
 #include <gtk/gtk.h>
 #endif
@@ -54,6 +59,23 @@ public:
         // Catalogs ship later (implementation-plan.md §4.3); initializing the
         // locale now keeps date/number formatting correct from day one.
         locale_.Init(wxLANGUAGE_DEFAULT, wxLOCALE_DONT_LOAD_DEFAULT);
+
+#ifndef _WIN32
+        // Our sources are UTF-8, but wxString converts narrow literals through
+        // the C locale's codeset. Under a non-UTF-8 locale (LC_ALL=C, common
+        // in cron/ssh/`su -` sessions) every literal containing a typographic
+        // character — "…", "—", "✓", "▸" — silently becomes an EMPTY string,
+        // blanking menu labels and status text rather than mangling them.
+        // Repair only the character type, and only when the codeset would
+        // actually break us, so a user's own UTF-8 locale keeps its case and
+        // collation rules. Must run after wxLocale::Init, which sets LC_ALL.
+        if (const char* codeset = nl_langinfo(CODESET);
+            codeset == nullptr || wxString(codeset).Upper().Find("UTF") == wxNOT_FOUND) {
+            if (std::setlocale(LC_CTYPE, "C.UTF-8") == nullptr) {
+                std::setlocale(LC_CTYPE, "en_US.UTF-8"); // musl/older glibc
+            }
+        }
+#endif
 
         auto* frame = new MainFrame();
         // A Tier-0 shell menu launches us with --action; the frame runs it
