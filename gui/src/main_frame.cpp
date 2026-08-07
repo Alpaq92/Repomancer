@@ -13,6 +13,7 @@
 #include "entropy_dialog.h"
 #include "remote_progress_dialog.h"
 #include "ssh_key_dialog.h"
+#include "ssh_setup_dialog.h"
 #include "text_sanitize.h"
 #include "theme.h"
 #include "title_bar.h"
@@ -1911,12 +1912,10 @@ void MainFrame::GenerateSshKey() {
     SetStatusText(wxString::Format(
         _("Generated %s — public key copied to the clipboard"),
         wxString::FromUTF8(key.fingerprint_sha256)));
-    wxMessageBox(
-        wxString::Format(_("A new SSH key was created:\n\n%s\n%s\n\nThe public "
-                           "key has been copied to the clipboard."),
-                         wxString::FromUTF8(key.private_path.string()),
-                         wxString::FromUTF8(key.fingerprint_sha256)),
-        _("SSH key generated"), wxOK | wxICON_INFORMATION, this);
+    // Carry straight on into the rest of the wizard: agent, ssh config, host
+    // key and a connection test, all driven from the key we just made.
+    repomancer::gui::SshSetupDialog setup(this, key, req.passphrase);
+    setup.ShowModal();
 }
 
 void MainFrame::OpenPreferences() {

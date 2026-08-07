@@ -35,6 +35,7 @@ add_executable(repomancer WIN32 MACOSX_BUNDLE
   src/commit_dialog.cpp
   src/ssh_key_dialog.cpp
   src/entropy_dialog.cpp
+  src/ssh_setup_dialog.cpp
   src/file_history_dialog.cpp
   src/preferences_dialog.cpp
   src/repo_view.cpp
