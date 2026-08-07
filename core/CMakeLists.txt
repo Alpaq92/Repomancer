@@ -20,6 +20,8 @@ add_library(repomancer-core STATIC
   src/ssh/connection.cpp
   src/forge/oauth.cpp
   src/forge/api.cpp
+  src/secret/secure_buffer.cpp
+  src/secret/encrypted_store.cpp
 )
 add_library(repomancer::core ALIAS repomancer-core)
 
@@ -34,12 +36,17 @@ target_include_directories(repomancer-core
 
 target_compile_features(repomancer-core PUBLIC cxx_std_20)
 
+# libsodium powers core/secret (secure memory + the fallback token store). It is
+# an implementation detail — kept out of the public headers — so link it PRIVATE.
+find_package(unofficial-sodium CONFIG REQUIRED)
+
 target_link_libraries(repomancer-core
   PUBLIC
     nlohmann_json::nlohmann_json
     spdlog::spdlog
   PRIVATE
     reproc++
+    unofficial-sodium::sodium
 )
 
 repomancer_warnings(repomancer-core)
