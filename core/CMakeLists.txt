@@ -13,6 +13,13 @@ add_library(repomancer-core STATIC
   src/vcs/git/porcelain.cpp
   src/vcs/git/log_format.cpp
   src/vcs/git/git_driver.cpp
+  src/ssh/keys.cpp
+  src/ssh/agent.cpp
+  src/ssh/config.cpp
+  src/ssh/known_hosts.cpp
+  src/ssh/connection.cpp
+  src/forge/oauth.cpp
+  src/forge/api.cpp
 )
 add_library(repomancer::core ALIAS repomancer-core)
 

@@ -17,6 +17,13 @@ add_executable(repomancer-tests
   test_process_runner.cpp
   test_settings.cpp
   test_git_integration.cpp
+  test_ssh_keys.cpp
+  test_ssh_agent.cpp
+  test_ssh_config.cpp
+  test_ssh_known_hosts.cpp
+  test_ssh_connection.cpp
+  test_forge_oauth.cpp
+  test_forge_api.cpp
 )
 
 target_link_libraries(repomancer-tests PRIVATE
