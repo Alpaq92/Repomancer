@@ -178,11 +178,12 @@ SshResult<std::monostate> known_hosts_remove(const std::filesystem::path& known_
 // ---------------------------------------------------------------------------
 // Published forge host-key fingerprints.
 //
-// Recorded 2026-08 from each forge's official documentation. VERIFY against the
-// live pages before relying on them — host keys rotate (GitHub rotated its RSA
-// host key on 2023-03-24 after a private-key exposure). A STALE value here is
-// harmless: is_trusted_forge_key returning false only makes the wizard fall
-// back to manual fingerprint confirmation; it never rejects or auto-accepts.
+// Cross-checked 2026-08-07 against what the live servers present
+// (`ssh-keyscan <host> | ssh-keygen -lf -`): all six matched. Re-verify against
+// the published pages when host keys rotate (GitHub rotated its RSA host key on
+// 2023-03-24 after a private-key exposure). A STALE value here is harmless:
+// is_trusted_forge_key returning false only makes the wizard fall back to manual
+// fingerprint confirmation; it never rejects or auto-accepts.
 //
 //   GitHub:  https://docs.github.com/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
 //   GitLab:  https://docs.gitlab.com/ee/user/gitlab_com/#ssh-host-keys-fingerprints
