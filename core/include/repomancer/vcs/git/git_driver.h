@@ -150,6 +150,14 @@ public:
                                                        const std::string& branch,
                                                        bool checkout) const;
 
+    // Delete a branch. Without `force` git refuses one whose work is not
+    // merged anywhere — the caller is expected to surface that and ask before
+    // retrying with force, rather than discarding commits silently. git also
+    // refuses to delete the branch that is checked out.
+    [[nodiscard]] VcsResult<std::string> delete_branch(const std::filesystem::path& repo,
+                                                       const std::string& branch,
+                                                       bool force = false) const;
+
     // Remote synchronization. All three run prompt-free
     // (GIT_TERMINAL_PROMPT=0): missing credentials fail fast with git's own
     // message rather than hanging on a hidden prompt. `pull` is --ff-only —

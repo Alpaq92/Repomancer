@@ -1205,3 +1205,55 @@ TEST_CASE("git integration: clone rejects empty url or destination") {
     CHECK_FALSE(driver.clone("", "/tmp/repomancer-nowhere").ok());
     CHECK_FALSE(driver.clone("https://example.invalid/r.git", "").ok());
 }
+
+TEST_CASE("git integration: delete_branch removes a merged branch") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    REQUIRE(driver.create_branch(repo.path(), "throwaway", false).ok());
+
+    const auto before = driver.refs(repo.path());
+    REQUIRE(before.ok());
+    const auto has = [](const auto& refs, const std::string& name) {
+        return std::any_of(refs.begin(), refs.end(),
+                           [&](const Ref& r) { return r.short_name == name; });
+    };
+    REQUIRE(has(before.value(), "throwaway"));
+
+    REQUIRE(driver.delete_branch(repo.path(), "throwaway").ok());
+    const auto after = driver.refs(repo.path());
+    REQUIRE(after.ok());
+    CHECK_FALSE(has(after.value(), "throwaway"));
+}
+
+TEST_CASE("git integration: delete_branch refuses unmerged work until forced") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    // `feature` in the fixture is merged; make a branch with a commit that is
+    // not reachable from anywhere else.
+    raw_git(repo.path(), {"checkout", "-q", "-b", "unmerged"});
+    raw_git(repo.path(), {"-c", "user.email=a@b", "-c", "user.name=A", "commit",
+                          "-q", "--allow-empty", "-m", "unmerged work"});
+    raw_git(repo.path(), {"checkout", "-q", "main"});
+
+    const auto refused = driver.delete_branch(repo.path(), "unmerged");
+    REQUIRE_FALSE(refused.ok());
+    // git's own words explain why, so the GUI can offer to force.
+    CHECK(refused.error().stderr_excerpt.find("not fully merged") != std::string::npos);
+
+    CHECK(driver.delete_branch(repo.path(), "unmerged", /*force=*/true).ok());
+}
+
+TEST_CASE("git integration: delete_branch refuses the checked-out branch") {
+    if (!FixtureRepo::git_available()) {
+        SKIP("git not found on PATH");
+    }
+    FixtureRepo repo;
+    GitDriver driver;
+    CHECK_FALSE(driver.delete_branch(repo.path(), "main").ok());
+}

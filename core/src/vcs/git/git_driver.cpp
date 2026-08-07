@@ -416,6 +416,16 @@ VcsResult<std::string> GitDriver::switch_branch(const std::filesystem::path& rep
         make_spec(&repo, {"switch", "--end-of-options", branch})));
 }
 
+VcsResult<std::string> GitDriver::delete_branch(const std::filesystem::path& repo,
+                                                const std::string& branch,
+                                                bool force) const {
+    if (auto refused = refuse_if_read_only(config_.trust)) {
+        return *refused;
+    }
+    return run_to_string(proc::ProcessRunner::run(make_spec(
+        &repo, {"branch", force ? "-D" : "-d", "--end-of-options", branch})));
+}
+
 VcsResult<std::string> GitDriver::create_branch(const std::filesystem::path& repo,
                                                 const std::string& branch,
                                                 bool checkout) const {
